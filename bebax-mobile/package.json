@@ -1,12 +1,16 @@
 {
   "name": "bebax-mobile",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "App.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:android": "eas build --platform android",
+    "build:ios": "eas build --platform ios",
+    "submit:android": "eas submit --platform android",
+    "submit:ios": "eas submit --platform ios"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
