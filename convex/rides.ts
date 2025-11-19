@@ -1,0 +1,490 @@
+import { mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+
+// Validation helper
+const validateLatLng = (location: { lat: number; lng: number }) => {
+    if (location.lat < -90 || location.lat > 90) {
+        throw new Error("Invalid latitude: must be between -90 and 90");
+    }
+    if (location.lng < -180 || location.lng > 180) {
+        throw new Error("Invalid longitude: must be between -180 and 180");
+    }
+};
+
+const sanitizeString = (str: string, maxLength: number = 500): string => {
+    return str.trim().substring(0, maxLength);
+};
+
+// Helper to calculate distance (Haversine)
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+function calculateFare(distance: number, vehicleType: string) {
+    const baseFares: Record<string, number> = {
+        tricycle: 2000,
+        van: 5000,
+        truck: 8000,
+        semitrailer: 15000
+    };
+    const perKmRates: Record<string, number> = {
+        tricycle: 300,
+        van: 500,
+        truck: 800,
+        semitrailer: 1200
+    };
+
+    const base = baseFares[vehicleType] || 2000;
+    const rate = perKmRates[vehicleType] || 300;
+
+    return base + (distance * rate);
+}
+
+// Enhanced create ride with validation
+export const create = mutation({
+    args: {
+        pickup_location: v.object({
+            lat: v.number(),
+            lng: v.number(),
+            address: v.string(),
+        }),
+        dropoff_location: v.object({
+            lat: v.number(),
+            lng: v.number(),
+            address: v.string(),
+        }),
+        vehicle_type: v.union(
+            v.literal("tricycle"),
+            v.literal("van"),
+            v.literal("truck"),
+            v.literal("semitrailer")
+        ),
+        cargo_details: v.string(),
+        cargo_photos: v.optional(v.array(v.string())),
+        special_instructions: v.optional(v.string()),
+        scheduled_time: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        // Validate coordinates
+        validateLatLng(args.pickup_location);
+        validateLatLng(args.dropoff_location);
+
+        // Validate addresses
+        if (args.pickup_location.address.length < 3) {
+            throw new Error("Pickup address too short");
+        }
+        if (args.dropoff_location.address.length < 3) {
+            throw new Error("Dropoff address too short");
+        }
+
+        // Sanitize inputs
+        const cargoDetails = sanitizeString(args.cargo_details, 500);
+        const specialInstructions = args.special_instructions
+            ? sanitizeString(args.special_instructions, 300)
+            : undefined;
+
+        // Validate cargo photos (max 5)
+        if (args.cargo_photos && args.cargo_photos.length > 5) {
+            throw new Error("Maximum 5 cargo photos allowed");
+        }
+
+        const distance = calculateDistance(
+            args.pickup_location.lat,
+            args.pickup_location.lng,
+            args.dropoff_location.lat,
+            args.dropoff_location.lng
+        );
+
+        // Validate distance (max 500km for single trip)
+        if (distance > 500) {
+            throw new Error("Trip distance exceeds maximum allowed (500km)");
+        }
+
+        const fare = calculateFare(distance, args.vehicle_type);
+
+        const rideId = await ctx.db.insert("rides", {
+            customer_clerk_id: identity.subject,
+            vehicle_type: args.vehicle_type,
+            pickup_location: args.pickup_location,
+            dropoff_location: args.dropoff_location,
+            cargo_details: cargoDetails,
+            cargo_photos: args.cargo_photos,
+            special_instructions: specialInstructions,
+            scheduled_time: args.scheduled_time,
+            distance: Math.round(distance * 100) / 100,
+            fare_estimate: fare,
+            status: "pending",
+            payment_status: "pending",
+            created_at: new Date().toISOString(),
+        });
+
+        // Notify nearby drivers
+        const nearbyDrivers = await getNearbyDriversInternal(
+            ctx,
+            args.pickup_location.lat,
+            args.pickup_location.lng,
+            10 // 10km radius
+        );
+
+        for (const driver of nearbyDrivers) {
+            await ctx.db.insert("notifications", {
+                user_clerk_id: driver.clerkId,
+                type: "ride_request",
+                title: "New Ride Request",
+                body: `${args.vehicle_type} needed - ${Math.round(distance)}km - ${fare} TZS`,
+                read: false,
+                ride_id: rideId,
+                created_at: new Date().toISOString(),
+            });
+        }
+
+        return rideId;
+    },
+});
+
+// Get nearby drivers (internal helper)
+async function getNearbyDriversInternal(ctx: any, lat: number, lng: number, radiusKm: number) {
+    const drivers = await ctx.db
+        .query("drivers")
+        .withIndex("by_online_status", (q) => q.eq("is_online", true))
+        .filter((q: any) => q.eq(q.field("verified"), true))
+        .collect();
+
+    return drivers.filter((driver: any) => {
+        if (!driver.current_location) return false;
+        const distance = calculateDistance(
+            lat,
+            lng,
+            driver.current_location.lat,
+            driver.current_location.lng
+        );
+        return distance <= radiusKm;
+    });
+}
+
+// Get nearby drivers (public query)
+export const getNearbyDrivers = query({
+    args: {
+        lat: v.number(),
+        lng: v.number(),
+        radiusKm: v.number(),
+    },
+    handler: async (ctx, args) => {
+        // Validate inputs
+        validateLatLng({ lat: args.lat, lng: args.lng });
+        if (args.radiusKm < 1 || args.radiusKm > 50) {
+            throw new Error("Radius must be between 1 and 50 km");
+        }
+
+        return await getNearbyDriversInternal(ctx, args.lat, args.lng, args.radiusKm);
+    },
+});
+
+// Driver accepts ride with validation
+export const accept = mutation({
+    args: {
+        ride_id: v.id("rides"),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!driver || !driver.verified) {
+            throw new Error("Driver not verified");
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            throw new Error("Ride not found");
+        }
+
+        if (ride.status !== "pending") {
+            throw new Error("Ride is no longer available");
+        }
+
+        await ctx.db.patch(args.ride_id, {
+            driver_clerk_id: identity.subject,
+            status: "accepted",
+            accepted_at: new Date().toISOString(),
+        });
+
+        // Notify customer
+        await ctx.db.insert("notifications", {
+            user_clerk_id: ride.customer_clerk_id,
+            type: "ride_accepted",
+            title: "Driver Found!",
+            body: "Your driver is on the way",
+            read: false,
+            ride_id: args.ride_id,
+            created_at: new Date().toISOString(),
+        });
+    },
+});
+
+// Update ride status with validation
+export const updateStatus = mutation({
+    args: {
+        ride_id: v.id("rides"),
+        status: v.union(
+            v.literal("loading"),
+            v.literal("ongoing"),
+            v.literal("delivered"),
+            v.literal("completed"),
+            v.literal("cancelled")
+        ),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            throw new Error("Ride not found");
+        }
+
+        if (ride.customer_clerk_id !== identity.subject && ride.driver_clerk_id !== identity.subject) {
+            throw new Error("Not authorized");
+        }
+
+        // Validate status transitions
+        const validTransitions: Record<string, string[]> = {
+            "accepted": ["loading", "cancelled"],
+            "loading": ["ongoing", "cancelled"],
+            "ongoing": ["delivered", "cancelled"],
+            "delivered": ["completed"],
+        };
+
+        if (ride.status && validTransitions[ride.status] && !validTransitions[ride.status].includes(args.status)) {
+            throw new Error(`Invalid status transition from ${ride.status} to ${args.status}`);
+        }
+
+        const update: any = { status: args.status };
+        const now = new Date().toISOString();
+
+        if (args.status === "loading") update.loading_started_at = now;
+        if (args.status === "ongoing") update.trip_started_at = now;
+        if (args.status === "delivered") update.delivered_at = now;
+        if (args.status === "completed") update.completed_at = now;
+        if (args.status === "cancelled") update.cancelled_at = now;
+
+        await ctx.db.patch(args.ride_id, update);
+
+        // Trigger cash settlement for delivered rides
+        if (args.status === "delivered" && ride.payment_method === "cash") {
+            // Schedule settlement to run after this mutation completes
+            await ctx.scheduler.runAfter(0, "payments:settleCashTrip" as any, {
+                ride_id: args.ride_id,
+            });
+        }
+
+        // Notify the other party
+        const notifyId = identity.subject === ride.customer_clerk_id
+            ? ride.driver_clerk_id
+            : ride.customer_clerk_id;
+
+        if (notifyId) {
+            await ctx.db.insert("notifications", {
+                user_clerk_id: notifyId,
+                type: "ride_request",
+                title: `Ride ${args.status}`,
+                body: `The ride status has been updated to ${args.status}`,
+                read: false,
+                ride_id: args.ride_id,
+                created_at: new Date().toISOString(),
+            });
+        }
+    },
+});
+
+// Track driver location during ride with validation
+export const updateDriverLocation = mutation({
+    args: {
+        ride_id: v.id("rides"),
+        location: v.object({
+            lat: v.number(),
+            lng: v.number(),
+        }),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        // Validate coordinates
+        validateLatLng(args.location);
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride || ride.driver_clerk_id !== identity.subject) {
+            throw new Error("Not authorized");
+        }
+
+        const updates = ride.driver_location_updates || [];
+        updates.push({
+            lat: args.location.lat,
+            lng: args.location.lng,
+            timestamp: new Date().toISOString(),
+        });
+
+        // Keep only last 50 updates to avoid bloat
+        if (updates.length > 50) {
+            updates.shift();
+        }
+
+        await ctx.db.patch(args.ride_id, {
+            driver_location_updates: updates,
+        });
+    },
+});
+
+// Rate ride with validation
+export const rateRide = mutation({
+    args: {
+        ride_id: v.id("rides"),
+        rating: v.number(),
+        review: v.optional(v.string()),
+        tip_amount: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        // Validate rating
+        if (args.rating < 1 || args.rating > 5) {
+            throw new Error("Rating must be between 1 and 5");
+        }
+
+        // Validate tip
+        if (args.tip_amount && (args.tip_amount < 0 || args.tip_amount > 100000)) {
+            throw new Error("Invalid tip amount");
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            throw new Error("Ride not found");
+        }
+
+        const isCustomer = ride.customer_clerk_id === identity.subject;
+        const isDriver = ride.driver_clerk_id === identity.subject;
+
+        if (!isCustomer && !isDriver) {
+            throw new Error("Not authorized");
+        }
+
+        // Sanitize review
+        const sanitizedReview = args.review ? sanitizeString(args.review, 500) : undefined;
+
+        const update: any = {};
+        if (isCustomer) {
+            update.driver_rating = args.rating;
+            update.driver_review = sanitizedReview;
+            update.tip_amount = args.tip_amount;
+        } else {
+            update.customer_rating = args.rating;
+            update.customer_review = sanitizedReview;
+        }
+
+        await ctx.db.patch(args.ride_id, update);
+    },
+});
+
+// Get my rides
+export const listMyRides = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (driver) {
+            return await ctx.db
+                .query("rides")
+                .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
+                .order("desc")
+                .collect();
+        }
+
+        return await ctx.db
+            .query("rides")
+            .withIndex("by_customer", (q) => q.eq("customer_clerk_id", identity.subject))
+            .order("desc")
+            .collect();
+    },
+});
+
+// Get available rides for drivers
+export const listAvailableRides = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!driver) {
+            throw new Error("Only drivers can view available rides");
+        }
+
+        return await ctx.db
+            .query("rides")
+            .withIndex("by_status", (q) => q.eq("status", "pending"))
+            .order("desc")
+            .collect();
+    },
+});
+
+// Get ride details
+export const getRide = query({
+    args: { ride_id: v.id("rides") },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            return null;
+        }
+
+        if (ride.customer_clerk_id !== identity.subject && ride.driver_clerk_id !== identity.subject) {
+            throw new Error("Not authorized");
+        }
+
+        return ride;
+    },
+});
