@@ -27,7 +27,9 @@ export default function LiveTracking({ rideId }: LiveTrackingProps) {
         }
 
         const calculateETA = async () => {
-            const latestLocation = ride.driver_location_updates[ride.driver_location_updates.length - 1];
+            const latestLocation = ride.driver_location_updates?.[ride.driver_location_updates.length - 1];
+
+            if (!latestLocation) return;
 
             // Determine destination based on status
             let destination;

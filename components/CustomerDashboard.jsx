@@ -58,6 +58,7 @@ export default function CustomerDashboard() {
                 },
                 vehicle_type: bookingForm.vehicleType,
                 cargo_details: bookingForm.cargoDetails || "General items",
+                payment_method: "cash", // Default to cash for now
             });
 
             toast({
@@ -110,8 +111,8 @@ export default function CustomerDashboard() {
                 <div className="absolute inset-0 flex items-center justify-center">
                     <div className="text-center">
                         <MapPin className="w-16 h-16 text-bebax-green mx-auto mb-4 animate-pulse-green" />
-                        <p className="text-gray-700 font-medium mb-1">Map Ready</p>
-                        <p className="text-sm text-gray-500">Add GOOGLE_MAPS_API_KEY to .env.local</p>
+                        <p className="text-gray-700 font-medium mb-1">Map View</p>
+                        <p className="text-sm text-gray-500">Interactive map coming soon</p>
                     </div>
                 </div>
 

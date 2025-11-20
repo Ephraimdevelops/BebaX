@@ -3,10 +3,12 @@
 import { useUser } from '@clerk/nextjs';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@/convex/_generated/api';
+import { Id } from '@/convex/_generated/dataModel';
 import { UserButton } from '@clerk/nextjs';
 import {
     Truck, Users, MapPin, DollarSign, TrendingUp,
-    CheckCircle, XCircle, Clock, Eye, FileText, Image as ImageIcon
+    CheckCircle, XCircle, Clock, Eye, FileText, Image as ImageIcon,
+    Check, X, Car, UserCheck, ExternalLink
 } from 'lucide-react';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
@@ -15,27 +17,28 @@ export default function AdminDashboard() {
     const { user } = useUser();
     const { toast } = useToast();
 
-    // Queries
-    const pendingDrivers = useQuery(api.admin.getPendingDrivers);
+    // Queries - using enriched versions with joined data
+    const pendingDrivers = useQuery(api.admin.getPendingDriversEnriched);
     const allDrivers = useQuery(api.admin.getAllDrivers);
-    const activeRides = useQuery(api.admin.getActiveRides);
-    const stats = useQuery(api.admin.getPlatformStats);
+    const activeRides = useQuery(api.admin.getAllRidesEnriched, { status: "ongoing" });
+    const stats = useQuery(api.admin.getAnalytics);
 
     // Mutations
     const verifyDriver = useMutation(api.admin.verifyDriver);
+    const rejectDriver = useMutation(api.admin.rejectDriver);
 
     const [selectedDriver, setSelectedDriver] = useState(null);
-    const [verifying, setVerifying] = useState(null);
+    const [verifying, setVerifying] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('pending'); // pending, drivers, rides, stats
 
-    const handleVerifyDriver = async (driverId, approved, reason = '') => {
+    const handleVerifyDriver = async (driverId: Id<"drivers">, approved: boolean, reason: string = '') => {
         setVerifying(driverId);
         try {
-            await verifyDriver({
-                driver_id: driverId,
-                verified: approved,
-                rejection_reason: reason,
-            });
+            if (approved) {
+                await verifyDriver({ driver_id: driverId });
+            } else {
+                await rejectDriver({ driver_id: driverId, reason });
+            }
 
             toast({
                 title: approved ? 'Driver Approved! ✅' : 'Driver Rejected',
@@ -48,7 +51,7 @@ export default function AdminDashboard() {
         } catch (error) {
             toast({
                 title: 'Error',
-                description: error.message,
+                description: error instanceof Error ? error.message : 'Failed to update driver',
                 variant: 'destructive',
             });
         } finally {
@@ -65,9 +68,9 @@ export default function AdminDashboard() {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div className="min-h-screen bg-gray-50" >
             {/* Header */}
-            <header className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-bebax-sm">
+            < header className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-bebax-sm" >
                 <div className="container mx-auto px-4 py-4">
                     <div className="flex justify-between items-center">
                         <div className="flex items-center space-x-3">
@@ -82,20 +85,20 @@ export default function AdminDashboard() {
                         <UserButton afterSignOutUrl="/" />
                     </div>
                 </div>
-            </header>
+            </header >
 
             {/* Stats Overview */}
-            <div className="container mx-auto px-4 py-6">
+            < div className="container mx-auto px-4 py-6" >
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                     <div className="card-bebax p-6">
                         <div className="flex items-center justify-between mb-2">
                             <Users className="w-8 h-8 text-blue-600" />
                             <TrendingUp className="w-5 h-5 text-green-600" />
                         </div>
-                        <p className="text-3xl font-bold">{stats?.total_drivers || 0}</p>
+                        <p className="text-3xl font-bold">{stats?.totalDrivers || 0}</p>
                         <p className="text-sm text-gray-600">Total Drivers</p>
                         <p className="text-xs text-green-600 mt-1">
-                            {stats?.verified_drivers || 0} verified
+                            {stats?.verifiedDrivers || 0} verified
                         </p>
                     </div>
 
@@ -104,10 +107,10 @@ export default function AdminDashboard() {
                             <MapPin className="w-8 h-8 text-bebax-green" />
                             <TrendingUp className="w-5 h-5 text-green-600" />
                         </div>
-                        <p className="text-3xl font-bold">{stats?.total_rides || 0}</p>
+                        <p className="text-3xl font-bold">{stats?.totalRides || 0}</p>
                         <p className="text-sm text-gray-600">Total Rides</p>
                         <p className="text-xs text-bebax-green mt-1">
-                            {stats?.active_rides || 0} active now
+                            {activeRides?.length || 0} active now
                         </p>
                     </div>
 
@@ -117,7 +120,7 @@ export default function AdminDashboard() {
                             <TrendingUp className="w-5 h-5 text-green-600" />
                         </div>
                         <p className="text-3xl font-bold">
-                            {((stats?.total_revenue || 0) / 1000).toFixed(0)}K
+                            {((stats?.totalRevenue || 0) / 1000).toFixed(0)}K
                         </p>
                         <p className="text-sm text-gray-600">Revenue (TZS)</p>
                         <p className="text-xs text-gray-500 mt-1">Platform commission</p>
@@ -149,15 +152,15 @@ export default function AdminDashboard() {
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
                                     className={`flex-1 px-4 py-3 rounded-xl font-medium text-sm transition-all ${activeTab === tab.id
-                                            ? 'bg-bebax-green text-white shadow-bebax-md'
-                                            : 'text-gray-600 hover:bg-gray-100'
+                                        ? 'bg-bebax-green text-white shadow-bebax-md'
+                                        : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                 >
                                     {tab.label}
-                                    {tab.count > 0 && (
+                                    {(tab.count ?? 0) > 0 && (
                                         <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${activeTab === tab.id ? 'bg-white/20' : 'bg-gray-200'
                                             }`}>
-                                            {tab.count}
+                                            {tab.count ?? 0}
                                         </span>
                                     )}
                                 </button>
@@ -296,8 +299,8 @@ export default function AdminDashboard() {
                                                     </span>
                                                 )}
                                                 <span className={`px-3 py-1 rounded-full text-xs font-semibold ${driver.verified
-                                                        ? 'bg-green-100 text-green-700'
-                                                        : 'bg-yellow-100 text-yellow-700'
+                                                    ? 'bg-green-100 text-green-700'
+                                                    : 'bg-yellow-100 text-yellow-700'
                                                     }`}>
                                                     {driver.verified ? 'Verified' : 'Pending'}
                                                 </span>
@@ -342,7 +345,7 @@ export default function AdminDashboard() {
                         </div>
                     )}
                 </div>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 }

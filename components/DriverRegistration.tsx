@@ -24,14 +24,24 @@ export default function DriverRegistration() {
         licenseNumber: '',
     });
 
-    const [documents, setDocuments] = useState({
+    const [documents, setDocuments] = useState<{
+        nidaPhoto: string | null;
+        licensePhoto: string | null;
+        insurancePhoto: string | null;
+        roadPermitPhoto: string | null;
+    }>({
         nidaPhoto: null,
         licensePhoto: null,
         insurancePhoto: null,
         roadPermitPhoto: null,
     });
 
-    const [vehicleInfo, setVehicleInfo] = useState({
+    const [vehicleInfo, setVehicleInfo] = useState<{
+        type: string;
+        plateNumber: string;
+        capacityKg: string;
+        photos: string[];
+    }>({
         type: '',
         plateNumber: '',
         capacityKg: '',
@@ -74,27 +84,46 @@ export default function DriverRegistration() {
 
         setIsSubmitting(true);
         try {
-            // 1. Register driver
+            // Get current location (or use a default if geolocation fails)
+            const location: { lat: number; lng: number } = await new Promise((resolve) => {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => resolve({
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        }),
+                        () => resolve({ lat: -6.7924, lng: 39.2083 }) // Default to Dar es Salaam
+                    );
+                } else {
+                    resolve({ lat: -6.7924, lng: 39.2083 });
+                }
+            });
+
+            // 1. Register driver with all required fields
             const driverId = await registerDriver({
                 license_number: personalInfo.licenseNumber,
                 nida_number: personalInfo.nidaNumber,
-            });
-
-            // 2. Upload documents
-            await uploadDocuments({
-                nida_photo: documents.nidaPhoto,
-                license_photo: documents.licensePhoto,
-                insurance_photo: documents.insurancePhoto,
-                road_permit_photo: documents.roadPermitPhoto,
-            });
-
-            // 3. Create vehicle
-            await createVehicle({
-                type: vehicleInfo.type,
-                plate_number: vehicleInfo.plateNumber,
+                vehicle_type: vehicleInfo.type,
+                vehicle_plate: vehicleInfo.plateNumber,
                 capacity_kg: parseInt(vehicleInfo.capacityKg),
-                photos: vehicleInfo.photos,
+                payout_method: "mpesa", // Default payout method
+                payout_number: "", // Will be set later in driver profile
+                location: location,
             });
+
+            // 2. Upload documents (only include non-null values)
+            const documentsToUpload: any = {};
+            if (documents.nidaPhoto) documentsToUpload.nida_photo = documents.nidaPhoto;
+            if (documents.licensePhoto) documentsToUpload.license_photo = documents.licensePhoto;
+            if (documents.insurancePhoto) documentsToUpload.insurance_photo = documents.insurancePhoto;
+            if (documents.roadPermitPhoto) documentsToUpload.road_permit_photo = documents.roadPermitPhoto;
+
+            if (Object.keys(documentsToUpload).length > 0) {
+                await uploadDocuments(documentsToUpload);
+            }
+
+            // 3. Create vehicle (if needed - vehicle is already created in register mutation)
+            // This step may be redundant depending on your backend logic
 
             toast({
                 title: 'Registration Submitted! 🎉',
@@ -106,7 +135,7 @@ export default function DriverRegistration() {
         } catch (error) {
             toast({
                 title: 'Registration Failed',
-                description: error.message || 'Please try again',
+                description: error instanceof Error ? error.message : 'Please try again',
                 variant: 'destructive',
             });
         } finally {

@@ -181,11 +181,14 @@ export const uploadVehiclePhotos = mutation({
             })
         );
 
+        // Filter out any null values
+        const validPhotoUrls = photoUrls.filter((url): url is string => url !== null);
+
         await ctx.db.patch(args.vehicle_id, {
-            photos: photoUrls,
+            photos: validPhotoUrls,
         });
 
-        return { success: true, photos: photoUrls };
+        return { success: true, photos: validPhotoUrls };
     },
 });
 

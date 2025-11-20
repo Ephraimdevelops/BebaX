@@ -1,7 +1,7 @@
 'use client';
 
 import { SignIn, SignUp, UserButton, useUser } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +27,12 @@ export default function Home() {
         phone: "",
     });
 
+    const { isAuthenticated, isLoading } = useConvexAuth();
+
+    useEffect(() => {
+        console.log("Convex Auth State:", { isAuthenticated, isLoading, user: user?.id });
+    }, [isAuthenticated, isLoading, user]);
+
     // Handle profile creation
     const handleRoleSelection = async (role) => {
         setSelectedRole(role);
@@ -39,6 +45,15 @@ export default function Home() {
                 title: "Missing Information",
                 description: "Please enter your name and phone number",
                 variant: "destructive",
+            });
+            return;
+        }
+
+        if (!isAuthenticated) {
+            toast({
+                title: "Authentication Pending",
+                description: "Please wait a moment while we verify your account...",
+                variant: "default",
             });
             return;
         }
@@ -64,8 +79,7 @@ export default function Home() {
                 description: error.message || "Failed to create profile. Please try again.",
                 variant: "destructive",
             });
-            setSelectedRole(null);
-            setShowForm(false);
+            // Don't reset form on error so user can try again
             setIsCreating(false);
         }
     };

@@ -20,10 +20,12 @@ export const getPendingDrivers = query({
             throw new Error("Admin access required");
         }
 
-        return await ctx.db
+        const unverifiedDrivers = await ctx.db
             .query("drivers")
-            .withIndex("by_verification", (q) => q.eq("verification_status", "pending"))
+            .filter((q: any) => q.eq(q.field("verified"), false))
             .collect();
+
+        return unverifiedDrivers;
     },
 });
 
@@ -54,7 +56,6 @@ export const verifyDriver = mutation({
 
         await ctx.db.patch(args.driver_id, {
             verified: true,
-            verification_status: "approved",
         });
 
         // Notify driver
@@ -97,8 +98,6 @@ export const rejectDriver = mutation({
 
         await ctx.db.patch(args.driver_id, {
             verified: false,
-            verification_status: "rejected",
-            rejection_reason: args.reason,
         });
 
         // Notify driver
@@ -134,13 +133,11 @@ export const getAllRides = query({
             throw new Error("Admin access required");
         }
 
-        let query = ctx.db.query("rides");
-
-        if (args.status) {
-            query = query.withIndex("by_status", (q) => q.eq("status", args.status as any));
-        }
-
-        const rides = await query.order("desc").take(args.limit || 100);
+        const baseQuery = ctx.db.query("rides");
+        const rides = await (args.status
+            ? baseQuery.withIndex("by_status", (q: any) => q.eq("status", args.status))
+            : baseQuery
+        ).order("desc").take(args.limit || 100);
         return rides;
     },
 });
@@ -189,9 +186,174 @@ export const getAnalytics = query({
             totalDrivers: allDrivers.length,
             verifiedDrivers: allDrivers.filter(d => d.verified).length,
             onlineDrivers: allDrivers.filter(d => d.is_online).length,
-            pendingDrivers: allDrivers.filter(d => d.verification_status === "pending").length,
+            pendingDrivers: allDrivers.filter(d => !d.verified).length,
             totalRevenue,
             averageRating: completedRides.reduce((sum, r) => sum + (r.driver_rating || 0), 0) / completedRides.length || 0,
         };
+    },
+});
+
+// Get all drivers with user profile and vehicle information
+export const getAllDrivers = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile || profile.role !== "admin") {
+            throw new Error("Admin access required");
+        }
+
+        const drivers = await ctx.db.query("drivers").collect();
+
+        // Enrich each driver with user profile and vehicle data
+        const enrichedDrivers = await Promise.all(
+            drivers.map(async (driver) => {
+                // Get user profile
+                const userProfile = await ctx.db
+                    .query("userProfiles")
+                    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", driver.clerkId))
+                    .first();
+
+                // Get vehicle
+                const vehicle = await ctx.db
+                    .query("vehicles")
+                    .withIndex("by_driver", (q: any) => q.eq("driver_clerk_id", driver.clerkId))
+                    .first();
+
+                return {
+                    ...driver,
+                    user_name: userProfile?.name || "Unknown",
+                    user_phone: userProfile?.phone || "N/A",
+                    vehicle_type: vehicle?.type || "N/A",
+                    vehicle_plate: vehicle?.plate_number || "N/A",
+                };
+            })
+        );
+
+        return enrichedDrivers;
+    },
+});
+
+// Enhanced getPendingDrivers with all necessary fields
+export const getPendingDriversEnriched = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile || profile.role !== "admin") {
+            throw new Error("Admin access required");
+        }
+
+        const unverifiedDrivers = await ctx.db
+            .query("drivers")
+            .filter((q: any) => q.eq(q.field("verified"), false))
+            .collect();
+
+        // Enrich with user and vehicle data
+        const enriched = await Promise.all(
+            unverifiedDrivers.map(async (driver) => {
+                const userProfile = await ctx.db
+                    .query("userProfiles")
+                    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", driver.clerkId))
+                    .first();
+
+                const vehicle = await ctx.db
+                    .query("vehicles")
+                    .withIndex("by_driver", (q: any) => q.eq("driver_clerk_id", driver.clerkId))
+                    .first();
+
+                // Get document URLs if they exist
+                const documents = driver.documents || {};
+                const nida_photo = documents.nida_photo
+                    ? await ctx.storage.getUrl(documents.nida_photo)
+                    : null;
+                const license_photo = documents.license_photo
+                    ? await ctx.storage.getUrl(documents.license_photo)
+                    : null;
+
+                return {
+                    ...driver,
+                    user_name: userProfile?.name || "Unknown",
+                    user_phone: userProfile?.phone || "N/A",
+                    vehicle_type: vehicle?.type || "N/A",
+                    vehicle_plate: vehicle?.plate_number || "N/A",
+                    nida_photo,
+                    license_photo,
+                };
+            })
+        );
+
+        return enriched;
+    },
+});
+
+// Get all rides with customer and driver names
+export const getAllRidesEnriched = query({
+    args: {
+        status: v.optional(v.string()),
+        limit: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile || profile.role !== "admin") {
+            throw new Error("Admin access required");
+        }
+
+        const baseQuery = ctx.db.query("rides");
+        const rides = await (args.status
+            ? baseQuery.withIndex("by_status", (q: any) => q.eq("status", args.status))
+            : baseQuery
+        ).order("desc").take(args.limit || 100);
+
+        // Enrich with customer and driver names
+        const enrichedRides = await Promise.all(
+            rides.map(async (ride) => {
+                const customer = await ctx.db
+                    .query("userProfiles")
+                    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.customer_clerk_id))
+                    .first();
+
+                let driver = null;
+                if (ride.driver_clerk_id) {
+                    driver = await ctx.db
+                        .query("userProfiles")
+                        .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id))
+                        .first();
+                }
+
+                return {
+                    ...ride,
+                    customer_name: customer?.name || "Unknown",
+                    driver_name: driver?.name || "Unassigned",
+                };
+            })
+        );
+
+        return enrichedRides;
     },
 });

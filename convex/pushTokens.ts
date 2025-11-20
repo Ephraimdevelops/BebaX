@@ -37,7 +37,7 @@ export const savePushToken = mutation({
 export const getPushToken = async (ctx: any, clerkId: string): Promise<string | null> => {
     const profile = await ctx.db
         .query("userProfiles")
-        .withIndex("by_clerk_id", (q) => q.eq("clerkId", clerkId))
+        .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", clerkId))
         .first();
 
     return profile?.pushToken || null;

@@ -5,7 +5,7 @@ export default defineSchema({
   // User profiles (linked to Clerk)
   userProfiles: defineTable({
     clerkId: v.string(),
-    role: v.union(v.literal("customer"), v.literal("driver"), v.literal("admin")),
+    role: v.union(v.literal("customer"), v.literal("driver"), v.literal("admin"), v.literal("fleet_owner")),
     phone: v.string(),
     name: v.string(),
     email: v.optional(v.string()),
@@ -21,16 +21,25 @@ export default defineSchema({
     created_at: v.string(),
   }).index("by_clerk_id", ["clerkId"]),
 
+  // Fleets
+  fleets: defineTable({
+    owner_id: v.string(), // Clerk ID of fleet owner
+    name: v.string(),
+    total_earnings: v.number(),
+    created_at: v.string(),
+  }).index("by_owner", ["owner_id"]),
+
   // Drivers
   drivers: defineTable({
     clerkId: v.string(),
+    fleet_id: v.optional(v.id("fleets")),
     license_number: v.string(),
     nida_number: v.string(),
     documents: v.optional(v.object({
-      nida_photo: v.optional(v.string()),
-      license_photo: v.optional(v.string()),
-      insurance_photo: v.optional(v.string()),
-      road_permit_photo: v.optional(v.string()),
+      nida_photo: v.optional(v.id("_storage")),
+      license_photo: v.optional(v.id("_storage")),
+      insurance_photo: v.optional(v.id("_storage")),
+      road_permit_photo: v.optional(v.id("_storage")),
     })),
     verified: v.boolean(),
     is_online: v.boolean(),
@@ -54,7 +63,8 @@ export default defineSchema({
   })
     .index("by_clerk_id", ["clerkId"])
     .index("by_online_status", ["is_online"])
-    .index("by_wallet_locked", ["wallet_locked"]),
+    .index("by_wallet_locked", ["wallet_locked"])
+    .index("by_fleet_id", ["fleet_id"]),
 
   // Vehicles
   vehicles: defineTable({
@@ -100,6 +110,8 @@ export default defineSchema({
     payment_method: v.optional(v.string()),
     payment_status: v.string(),
     cash_collected: v.optional(v.boolean()), // For cash payments
+    insurance_opt_in: v.optional(v.boolean()),
+    insurance_fee: v.optional(v.number()),
     driver_location_updates: v.optional(v.array(v.object({
       lat: v.number(),
       lng: v.number(),
@@ -127,6 +139,8 @@ export default defineSchema({
     ride_id: v.id("rides"),
     sender_clerk_id: v.string(),
     message: v.string(),
+    type: v.optional(v.union(v.literal("text"), v.literal("audio"), v.literal("image"))),
+    format: v.optional(v.string()), // e.g., "audio/m4a"
     timestamp: v.string(),
     read: v.boolean(),
   }).index("by_ride", ["ride_id"]),
@@ -234,4 +248,18 @@ export default defineSchema({
     expiresAt: v.number(), // Unix timestamp
   }).index("by_key", ["key"])
     .index("by_expiry", ["expiresAt"]),
+
+  // SOS Alerts
+  sos_alerts: defineTable({
+    ride_id: v.optional(v.id("rides")),
+    user_clerk_id: v.string(),
+    location: v.object({
+      lat: v.number(),
+      lng: v.number(),
+    }),
+    status: v.union(v.literal("active"), v.literal("resolved")),
+    resolved_at: v.optional(v.string()),
+    created_at: v.string(),
+  }).index("by_status", ["status"])
+    .index("by_user", ["user_clerk_id"]),
 });

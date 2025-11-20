@@ -8,10 +8,12 @@
  * @module
  */
 
+import type * as actions from "../actions.js";
 import type * as admin from "../admin.js";
 import type * as debug from "../debug.js";
 import type * as drivers from "../drivers.js";
 import type * as fileUpload from "../fileUpload.js";
+import type * as fleets from "../fleets.js";
 import type * as messages from "../messages.js";
 import type * as negotiation from "../negotiation.js";
 import type * as notifications from "../notifications.js";
@@ -21,6 +23,7 @@ import type * as pushTokens from "../pushTokens.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as rides from "../rides.js";
 import type * as seed from "../seed.js";
+import type * as sos from "../sos.js";
 import type * as users from "../users.js";
 import type * as vehicles from "../vehicles.js";
 
@@ -31,10 +34,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  actions: typeof actions;
   admin: typeof admin;
   debug: typeof debug;
   drivers: typeof drivers;
   fileUpload: typeof fileUpload;
+  fleets: typeof fleets;
   messages: typeof messages;
   negotiation: typeof negotiation;
   notifications: typeof notifications;
@@ -44,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   rateLimit: typeof rateLimit;
   rides: typeof rides;
   seed: typeof seed;
+  sos: typeof sos;
   users: typeof users;
   vehicles: typeof vehicles;
 }>;

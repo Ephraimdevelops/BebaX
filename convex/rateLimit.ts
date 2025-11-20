@@ -44,7 +44,7 @@ export const checkRateLimit = async (
     // Find existing rate limit record
     const existing = await ctx.db
         .query("rateLimits")
-        .withIndex("by_key", (q) => q.eq("key", key))
+        .withIndex("by_key", (q: any) => q.eq("key", key))
         .first();
 
     if (!existing) {
@@ -127,7 +127,7 @@ export const getRateLimitStatus = query({
 
         const existing = await ctx.db
             .query("rateLimits")
-            .withIndex("by_key", (q) => q.eq("key", key))
+            .withIndex("by_key", (q: any) => q.eq("key", key))
             .first();
 
         if (!existing || existing.windowStart < now - config.windowMs) {

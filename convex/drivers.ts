@@ -37,7 +37,7 @@ export const register = mutation({
             nida_number: args.nida_number,
             documents: {},
             verified: false,
-            verification_status: "pending",
+
             is_online: false,
             current_location: args.location,
             last_location_update: new Date().toISOString(),
@@ -57,13 +57,26 @@ export const register = mutation({
     },
 });
 
-// Upload documents
+// Generate upload URL for Convex Storage
+export const generateUploadUrl = mutation(async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
+});
+
+// Get image URL from storage ID
+export const getImageUrl = query({
+    args: { storageId: v.id("_storage") },
+    handler: async (ctx, args) => {
+        return await ctx.storage.getUrl(args.storageId);
+    },
+});
+
+// Upload documents (save storage IDs)
 export const uploadDocuments = mutation({
     args: {
-        nida_photo: v.optional(v.string()),
-        license_photo: v.optional(v.string()),
-        insurance_photo: v.optional(v.string()),
-        road_permit_photo: v.optional(v.string()),
+        nida_photo: v.optional(v.id("_storage")),
+        license_photo: v.optional(v.id("_storage")),
+        insurance_photo: v.optional(v.id("_storage")),
+        road_permit_photo: v.optional(v.id("_storage")),
     },
     handler: async (ctx, args) => {
         const identity = await ctx.auth.getUserIdentity();
@@ -148,6 +161,46 @@ export const updateLocation = mutation({
             current_location: args.location,
             last_location_update: new Date().toISOString(),
         });
+    },
+});
+
+// Helper to check if user is admin
+async function checkAdmin(ctx: any) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+        throw new Error("Not authenticated");
+    }
+
+    const user = await ctx.db
+        .query("userProfiles")
+        .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+        .first();
+
+    if (!user || user.role !== "admin") {
+        throw new Error("Unauthorized: Admin access required");
+    }
+
+    return user;
+}
+
+// Admin: List unverified drivers
+export const listUnverified = query({
+    args: {},
+    handler: async (ctx) => {
+        await checkAdmin(ctx);
+        return await ctx.db
+            .query("drivers")
+            .filter((q) => q.eq(q.field("verified"), false))
+            .collect();
+    },
+});
+
+// Admin: Verify driver
+export const verifyDriver = mutation({
+    args: { driver_id: v.id("drivers") },
+    handler: async (ctx, args) => {
+        await checkAdmin(ctx);
+        await ctx.db.patch(args.driver_id, { verified: true });
     },
 });
 
@@ -242,6 +295,10 @@ export const requestPayout = mutation({
 
         if (args.amount > driver.total_earnings) {
             throw new Error("Insufficient balance");
+        }
+
+        if (!driver.payout_method) {
+            throw new Error("Payout method not set");
         }
 
         const commission = args.amount * driver.commission_rate;

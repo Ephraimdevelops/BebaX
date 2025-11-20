@@ -6,6 +6,8 @@ export const send = mutation({
     args: {
         ride_id: v.id("rides"),
         message: v.string(),
+        type: v.optional(v.union(v.literal("text"), v.literal("audio"), v.literal("image"))),
+        format: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         const identity = await ctx.auth.getUserIdentity();
@@ -30,6 +32,8 @@ export const send = mutation({
             ride_id: args.ride_id,
             sender_clerk_id: identity.subject,
             message: args.message,
+            type: args.type || "text",
+            format: args.format,
             timestamp: new Date().toISOString(),
             read: false,
         });
@@ -44,8 +48,8 @@ export const send = mutation({
             await ctx.db.insert("notifications", {
                 user_clerk_id: recipientId,
                 type: "ride_request",
-                title: "New Message",
-                body: args.message.substring(0, 50),
+                title: args.type === "audio" ? "New Voice Message" : "New Message",
+                body: args.type === "audio" ? "🎤 Voice Message" : args.message.substring(0, 50),
                 read: false,
                 ride_id: args.ride_id,
                 created_at: new Date().toISOString(),
@@ -54,6 +58,11 @@ export const send = mutation({
 
         return messageId;
     },
+});
+
+// Generate upload URL for audio/images
+export const generateUploadUrl = mutation(async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
 });
 
 // Get messages for a ride (real-time subscription)
@@ -83,6 +92,13 @@ export const getByRide = query({
             .withIndex("by_ride", (q) => q.eq("ride_id", args.ride_id))
             .order("asc")
             .collect();
+    },
+});
+
+export const getAudioUrl = query({
+    args: { storageId: v.id("_storage") },
+    handler: async (ctx, args) => {
+        return await ctx.storage.getUrl(args.storageId);
     },
 });
 

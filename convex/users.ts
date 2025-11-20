@@ -194,3 +194,64 @@ export const updateProfile = mutation({
         return profile._id;
     },
 });
+
+// Save Expo push token
+export const savePushToken = mutation({
+    args: { token: v.string() },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile) {
+            throw new Error("Profile not found");
+        }
+
+        await ctx.db.patch(profile._id, { pushToken: args.token });
+    },
+});
+
+// Delete user account
+export const deleteUser = mutation({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile) {
+            throw new Error("Profile not found");
+        }
+
+        // In a real app, we might want to soft-delete or anonymize
+        // For now, we'll delete the profile record
+        await ctx.db.delete(profile._id);
+
+        // If driver, delete driver record too
+        if (profile.role === "driver") {
+            const driver = await ctx.db
+                .query("drivers")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+                .first();
+            if (driver) {
+                await ctx.db.delete(driver._id);
+            }
+        }
+
+        return true;
+    },
+});
+
+

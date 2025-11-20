@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
 // Validation helper
 const validateLatLng = (location: { lat: number; lng: number }) => {
@@ -70,6 +71,8 @@ export const create = mutation({
         cargo_photos: v.optional(v.array(v.string())),
         special_instructions: v.optional(v.string()),
         scheduled_time: v.optional(v.string()),
+        payment_method: v.union(v.literal("cash"), v.literal("mobile_money")),
+        insurance_opt_in: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const identity = await ctx.auth.getUserIdentity();
@@ -112,7 +115,14 @@ export const create = mutation({
             throw new Error("Trip distance exceeds maximum allowed (500km)");
         }
 
-        const fare = calculateFare(distance, args.vehicle_type);
+        let fare = calculateFare(distance, args.vehicle_type);
+        let insuranceFee = 0;
+
+        // Apply insurance fee if opted in
+        if (args.insurance_opt_in) {
+            insuranceFee = 2000; // Flat fee for now
+            fare += insuranceFee;
+        }
 
         const rideId = await ctx.db.insert("rides", {
             customer_clerk_id: identity.subject,
@@ -123,8 +133,11 @@ export const create = mutation({
             cargo_photos: args.cargo_photos,
             special_instructions: specialInstructions,
             scheduled_time: args.scheduled_time,
+            payment_method: args.payment_method,
             distance: Math.round(distance * 100) / 100,
             fare_estimate: fare,
+            insurance_opt_in: args.insurance_opt_in,
+            insurance_fee: insuranceFee,
             status: "pending",
             payment_status: "pending",
             created_at: new Date().toISOString(),
@@ -158,7 +171,7 @@ export const create = mutation({
 async function getNearbyDriversInternal(ctx: any, lat: number, lng: number, radiusKm: number) {
     const drivers = await ctx.db
         .query("drivers")
-        .withIndex("by_online_status", (q) => q.eq("is_online", true))
+        .withIndex("by_online_status", (q: any) => q.eq("is_online", true))
         .filter((q: any) => q.eq(q.field("verified"), true))
         .collect();
 
@@ -227,12 +240,12 @@ export const accept = mutation({
             accepted_at: new Date().toISOString(),
         });
 
-        // Notify customer
+        // Notify the customer
         await ctx.db.insert("notifications", {
             user_clerk_id: ride.customer_clerk_id,
             type: "ride_accepted",
-            title: "Driver Found!",
-            body: "Your driver is on the way",
+            title: "Ride Accepted",
+            body: "A driver has accepted your ride request!",
             read: false,
             ride_id: args.ride_id,
             created_at: new Date().toISOString(),
@@ -304,6 +317,7 @@ export const updateStatus = mutation({
             : ride.customer_clerk_id;
 
         if (notifyId) {
+            // 1. Save notification to DB
             await ctx.db.insert("notifications", {
                 user_clerk_id: notifyId,
                 type: "ride_request",
@@ -313,6 +327,22 @@ export const updateStatus = mutation({
                 ride_id: args.ride_id,
                 created_at: new Date().toISOString(),
             });
+
+            // 2. Get user's push token
+            const userProfile = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", notifyId))
+                .first();
+
+            // 3. Send push notification if token exists
+            if (userProfile?.pushToken) {
+                await ctx.scheduler.runAfter(0, api.actions.sendPushNotification, {
+                    to: userProfile.pushToken,
+                    title: `Ride Update: ${args.status}`,
+                    body: `Your ride is now ${args.status}. Tap to view details.`,
+                    data: { rideId: args.ride_id },
+                });
+            }
         }
     },
 });
@@ -486,5 +516,98 @@ export const getRide = query({
         }
 
         return ride;
+    },
+});
+
+// Get active ride for customer with driver location
+export const getActiveRide = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const ride = await ctx.db
+            .query("rides")
+            .withIndex("by_customer", (q) => q.eq("customer_clerk_id", identity.subject))
+            .filter((q) =>
+                q.or(
+                    q.eq(q.field("status"), "pending"),
+                    q.eq(q.field("status"), "accepted"),
+                    q.eq(q.field("status"), "loading"),
+                    q.eq(q.field("status"), "ongoing"),
+                    q.eq(q.field("status"), "delivered")
+                )
+            )
+            .order("desc")
+            .first();
+
+        if (!ride) {
+            return null;
+        }
+
+        let driverLocation = null;
+        let driverPhone = null;
+        if (ride.driver_clerk_id) {
+            const driver = await ctx.db
+                .query("drivers")
+                .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id!))
+                .first();
+            if (driver) {
+                driverLocation = driver.current_location;
+            }
+
+            const userProfile = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id!))
+                .first();
+            if (userProfile) {
+                driverPhone = userProfile.phone;
+            }
+        }
+
+        return {
+            ...ride,
+            driver_location: driverLocation,
+            driver_phone: driverPhone,
+        };
+    },
+});
+// Get active ride for driver
+export const getDriverActiveRide = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const ride = await ctx.db
+            .query("rides")
+            .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
+            .filter((q) =>
+                q.or(
+                    q.eq(q.field("status"), "accepted"),
+                    q.eq(q.field("status"), "loading"),
+                    q.eq(q.field("status"), "ongoing")
+                )
+            )
+            .order("desc")
+            .first();
+
+        if (!ride) {
+            return null;
+        }
+
+        const customer = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.customer_clerk_id))
+            .first();
+
+        return {
+            ...ride,
+            customer_phone: customer?.phone,
+        };
     },
 });
