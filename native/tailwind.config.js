@@ -26,6 +26,15 @@ module.exports = {
         success: "#16A34A",
         error: "#DC2626",
         warning: "#EAB308",
+        beba: {
+          orange: '#FF5722', // Safety Orange (Action)
+          amber: '#FFAB00',  // Signal Amber
+          asphalt: '#121212', // Asphalt Dark (Base)
+          gunmetal: '#263238', // Gunmetal Grey (Secondary)
+          teal: '#00E5FF',    // Electric Teal (Accent)
+          white: '#FFFFFF',
+          gray: '#9E9E9E',
+        },
       },
       borderRadius: {
         'xl': '16px', // radius-md
@@ -41,7 +50,8 @@ module.exports = {
         'card': '0 10px 30px -5px rgba(0, 0, 0, 0.08)',
       },
       fontFamily: {
-        sans: ['Inter', 'System', 'Roboto', 'sans-serif'],
+        sans: ['SpaceGrotesk_400Regular', 'System'],
+        bold: ['SpaceGrotesk_700Bold', 'System'],
       }
     },
   },

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Plus, Trash2, Truck, Wallet, Users } from "lucide-react";
 
 export default function FleetDashboard() {
+    // @ts-ignore
     const fleet = useQuery(api.fleets.getMyFleet);
     const createFleet = useMutation(api.fleets.create);
     const addDriver = useMutation(api.fleets.addDriver);

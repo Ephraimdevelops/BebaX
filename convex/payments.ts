@@ -7,10 +7,8 @@ export const markPaid = mutation({
         ride_id: v.id("rides"),
         payment_method: v.union(
             v.literal("cash"),
-            v.literal("mpesa"),
-            v.literal("airtel"),
-            v.literal("tigo"),
-            v.literal("card")
+            v.literal("mobile_money"),
+            v.literal("wallet")
         ),
     },
     handler: async (ctx, args) => {

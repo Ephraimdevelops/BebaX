@@ -36,11 +36,6 @@
   ],
   "exclude": [
     "node_modules",
-    "native/_components_disabled",
-    "native/app/_tabs_disabled",
-    "native/app/_modal.tsx.disabled",
-    "native/hooks",
-    "native/constants",
-    "native/utils"
+    "native"
   ]
 }

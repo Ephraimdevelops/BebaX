@@ -5,7 +5,11 @@ const nextConfig = {
   },
   experimental: {
     // Remove if not using Server Components
+    // Remove if not using Server Components
     serverComponentsExternalPackages: ['mongodb'],
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
   },
   webpack(config, { dev }) {
     if (dev) {

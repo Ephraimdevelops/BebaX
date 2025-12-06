@@ -6,6 +6,9 @@ export default defineSchema({
   userProfiles: defineTable({
     clerkId: v.string(),
     role: v.union(v.literal("customer"), v.literal("driver"), v.literal("admin"), v.literal("fleet_owner")),
+    orgId: v.optional(v.id("organizations")), // Link to Organization
+    orgRole: v.optional(v.union(v.literal("admin"), v.literal("user"))), // Role within Org
+    spendingLimitPerDay: v.optional(v.number()), // Daily spending limit
     phone: v.string(),
     name: v.string(),
     email: v.optional(v.string()),
@@ -19,7 +22,21 @@ export default defineSchema({
     rating: v.number(),
     totalRides: v.number(),
     created_at: v.string(),
-  }).index("by_clerk_id", ["clerkId"]),
+  })
+    .index("by_clerk_id", ["clerkId"])
+    .index("by_org", ["orgId"]),
+
+  // Organizations (B2B Entities)
+  organizations: defineTable({
+    name: v.string(),
+    tinNumber: v.optional(v.string()),
+    walletBalance: v.number(), // Available funds
+    reservedBalance: v.number(), // Funds held for active rides
+    creditLimit: v.number(), // Overdraft limit
+    billingModel: v.union(v.literal("prepaid"), v.literal("invoice")),
+    adminEmail: v.string(),
+    created_at: v.string(),
+  }),
 
   // Fleets
   fleets: defineTable({
@@ -46,6 +63,7 @@ export default defineSchema({
     current_location: v.optional(v.object({
       lat: v.number(),
       lng: v.number(),
+      geohash: v.string(), // Added for geospatial queries
     })),
     last_location_update: v.optional(v.string()),
     rating: v.number(),
@@ -64,7 +82,8 @@ export default defineSchema({
     .index("by_clerk_id", ["clerkId"])
     .index("by_online_status", ["is_online"])
     .index("by_wallet_locked", ["wallet_locked"])
-    .index("by_fleet_id", ["fleet_id"]),
+    .index("by_fleet_id", ["fleet_id"])
+    .index("by_geohash", ["current_location.geohash"]), // Index for geo-queries
 
   // Vehicles
   vehicles: defineTable({
@@ -82,16 +101,19 @@ export default defineSchema({
   rides: defineTable({
     customer_clerk_id: v.string(),
     driver_clerk_id: v.optional(v.string()),
+    org_id: v.optional(v.id("organizations")), // Linked Organization
     vehicle_type: v.string(),
     pickup_location: v.object({
       lat: v.number(),
       lng: v.number(),
       address: v.string(),
+      geohash: v.optional(v.string()), // Added for geospatial queries
     }),
     dropoff_location: v.object({
       lat: v.number(),
       lng: v.number(),
       address: v.string(),
+      geohash: v.optional(v.string()), // Added for geospatial queries
     }),
     cargo_details: v.string(),
     cargo_photos: v.optional(v.array(v.string())),
@@ -107,11 +129,13 @@ export default defineSchema({
       timestamp: v.string(),
     }))),
     status: v.string(),
-    payment_method: v.optional(v.string()),
+    payment_method: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("wallet")), // Added wallet
     payment_status: v.string(),
     cash_collected: v.optional(v.boolean()), // For cash payments
     insurance_opt_in: v.optional(v.boolean()),
+    insurance_tier_id: v.optional(v.string()), // Basic, Standard, Corporate
     insurance_fee: v.optional(v.number()),
+    is_business_trip: v.optional(v.boolean()),
     driver_location_updates: v.optional(v.array(v.object({
       lat: v.number(),
       lng: v.number(),
@@ -256,6 +280,7 @@ export default defineSchema({
     location: v.object({
       lat: v.number(),
       lng: v.number(),
+      address: v.string(),
     }),
     status: v.union(v.literal("active"), v.literal("resolved")),
     resolved_at: v.optional(v.string()),

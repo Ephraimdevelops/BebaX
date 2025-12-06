@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import * as ImagePicker from 'expo-image-picker';
+import { Clock, CheckCircle, XCircle, Camera, ArrowLeft } from 'lucide-react-native';
 
 export default function DriverDocuments() {
     const router = useRouter();
@@ -34,49 +35,38 @@ export default function DriverDocuments() {
     };
 
     const uploadImageToConvex = async (uri: string) => {
-        // 1. Get upload URL
         const postUrl = await generateUploadUrl();
-
-        // 2. Convert URI to Blob
         const response = await fetch(uri);
         const blob = await response.blob();
-
-        // 3. POST to Convex Storage
         const result = await fetch(postUrl, {
             method: "POST",
             headers: { "Content-Type": blob.type },
             body: blob,
         });
-
         const { storageId } = await result.json();
         return storageId;
     };
 
     const handleSave = async () => {
         if (Object.keys(localImages).length === 0) {
-            Alert.alert("No Changes", "Please select at least one document to upload.");
+            Alert.alert("Hakuna Mabadiliko", "Tafadhali chagua picha moja.");
             return;
         }
 
         setUploading(true);
         try {
             const updates: any = {};
-
-            // Upload each selected image
             for (const [key, uri] of Object.entries(localImages)) {
                 if (uri) {
                     const storageId = await uploadImageToConvex(uri);
                     updates[key] = storageId;
                 }
             }
-
-            // Save storage IDs to driver profile
             await uploadDocuments(updates);
-
-            Alert.alert("Success", "Documents uploaded successfully!");
+            Alert.alert("Imetumwa!", "Nyaraka zimepakiwa kikamilifu.");
             router.back();
         } catch (err) {
-            Alert.alert("Error", "Failed to upload documents.");
+            Alert.alert("Kosa", "Imeshindikana kupakia nyaraka.");
             console.error(err);
         } finally {
             setUploading(false);
@@ -85,92 +75,118 @@ export default function DriverDocuments() {
 
     if (!driver) {
         return (
-            <View className="flex-1 justify-center items-center">
-                <ActivityIndicator size="large" color="#2563eb" />
+            <View className="flex-1 justify-center items-center bg-gray-50">
+                <ActivityIndicator size="large" color="#ea580c" />
             </View>
         );
     }
 
-    // Helper component to display image from Storage ID or Local URI
-    const DocumentImage = ({ storageId, localUri }: { storageId?: string, localUri?: string }) => {
-        // If we have a local URI (newly selected), show it
-        if (localUri) {
-            return (
-                <Image
-                    source={{ uri: localUri }}
-                    className="w-full h-48 rounded-lg bg-gray-100"
-                    resizeMode="cover"
-                />
-            );
-        }
-
-        // If we have a storage ID (saved), we need to fetch the URL
-        // Note: In a real app, we'd want to pre-fetch these URLs or use a component that handles it.
-        // For simplicity, we'll use a separate component that queries the URL.
-        if (storageId) {
-            return <StorageImage storageId={storageId as any} />;
-        }
+    const DocumentCard = ({ title, type, currentStorageId }: { title: string, type: keyof typeof localImages, currentStorageId?: string }) => {
+        const hasImage = localImages[type] || currentStorageId;
+        const isPending = hasImage && !localImages[type]; // Assuming if it's on server it's pending verification unless we have a status field. 
+        // For now, we'll just show "Uploaded" state. Real verification status would come from backend.
+        // User asked for: Pending (Amber Clock), Approved (Green Check), Rejected (Red X).
+        // Since we don't have verification status in the schema yet, we will simulate "Pending" for uploaded docs.
 
         return (
-            <View className="w-full h-48 bg-gray-100 rounded-lg mb-3 justify-center items-center border-2 border-dashed border-gray-300">
-                <Text className="text-gray-400">No image selected</Text>
-            </View>
+            <TouchableOpacity
+                onPress={() => pickImage(type)}
+                className="mb-4 bg-white rounded-2xl shadow-sm overflow-hidden border-2 border-gray-100 active:border-orange-500"
+            >
+                <View className="p-4 flex-row items-center justify-between bg-gray-50 border-b border-gray-100">
+                    <Text className="text-lg font-bold text-gray-900">{title}</Text>
+                    {hasImage ? (
+                        <View className="flex-row items-center bg-yellow-100 px-3 py-1 rounded-full">
+                            <Clock size={16} color="#ca8a04" />
+                            <Text className="text-yellow-700 font-bold ml-2 text-xs">INAHAKIKIWA</Text>
+                        </View>
+                    ) : (
+                        <View className="flex-row items-center bg-gray-200 px-3 py-1 rounded-full">
+                            <View className="w-2 h-2 rounded-full bg-gray-400 mr-2" />
+                            <Text className="text-gray-600 font-bold text-xs">WEKA PICHA</Text>
+                        </View>
+                    )}
+                </View>
+
+                <View className="p-4 items-center justify-center min-h-[160px]">
+                    {localImages[type] ? (
+                        <Image source={{ uri: localImages[type] }} className="w-full h-48 rounded-xl" resizeMode="cover" />
+                    ) : currentStorageId ? (
+                        <StorageImage storageId={currentStorageId} />
+                    ) : (
+                        <View className="items-center justify-center py-6">
+                            <View className="w-16 h-16 bg-orange-100 rounded-full items-center justify-center mb-3">
+                                <Camera size={32} color="#ea580c" />
+                            </View>
+                            <Text className="text-gray-500 font-medium">Bonyeza kupiga picha</Text>
+                        </View>
+                    )}
+                </View>
+            </TouchableOpacity>
         );
     };
 
-    const renderDocSection = (title: string, type: keyof typeof localImages, currentStorageId?: string) => (
-        <View className="mb-6 bg-white p-4 rounded-xl shadow-sm">
-            <Text className="font-bold text-gray-800 mb-2">{title}</Text>
-
-            <DocumentImage storageId={currentStorageId} localUri={localImages[type]} />
-
-            <TouchableOpacity
-                onPress={() => pickImage(type)}
-                className="bg-blue-50 p-3 rounded-lg border border-blue-100 mt-3"
-            >
-                <Text className="text-blue-600 text-center font-medium">
-                    {localImages[type] || currentStorageId ? "Change Photo" : "Select Photo"}
-                </Text>
-            </TouchableOpacity>
-        </View>
-    );
-
     return (
         <SafeAreaView className="flex-1 bg-gray-50">
-            <View className="p-4 bg-white border-b border-gray-200 flex-row items-center justify-between">
-                <View className="flex-row items-center">
-                    <TouchableOpacity onPress={() => router.back()} className="mr-4">
-                        <Text className="text-2xl">←</Text>
-                    </TouchableOpacity>
-                    <Text className="text-2xl font-bold">Documents</Text>
-                </View>
-                <TouchableOpacity
-                    onPress={handleSave}
-                    disabled={uploading}
-                    className={`px-4 py-2 rounded-full ${uploading ? 'bg-gray-300' : 'bg-blue-600'}`}
-                >
-                    {uploading ? (
-                        <ActivityIndicator color="white" size="small" />
-                    ) : (
-                        <Text className="text-white font-bold">Save</Text>
-                    )}
+            <View className="px-4 py-4 bg-white border-b border-gray-200 flex-row items-center justify-between shadow-sm z-10">
+                <TouchableOpacity onPress={() => router.back()} className="p-2 bg-gray-100 rounded-full">
+                    <ArrowLeft size={24} color="#374151" />
                 </TouchableOpacity>
+                <Text className="text-xl font-extrabold text-gray-900">Nyaraka / Documents</Text>
+                <View className="w-10" />
             </View>
 
             <ScrollView className="flex-1 p-4">
-                <View className="bg-yellow-50 p-4 rounded-xl mb-6 border border-yellow-100">
-                    <Text className="text-yellow-800 text-sm">
-                        Please upload clear photos of your documents. Verification takes 24-48 hours.
+                <View className="bg-blue-50 p-4 rounded-xl mb-6 border border-blue-100 flex-row items-start">
+                    <View className="mr-3 mt-1">
+                        <CheckCircle size={20} color="#2563eb" />
+                    </View>
+                    <Text className="text-blue-800 flex-1 leading-5">
+                        Hakikisha picha zinasomeka vizuri. Tunahakiki ndani ya masaa 24.
                     </Text>
                 </View>
 
-                {renderDocSection("National ID (NIDA)", "nida_photo", driver.documents?.nida_photo)}
-                {renderDocSection("Driver's License", "license_photo", driver.documents?.license_photo)}
-                {renderDocSection("Vehicle Insurance", "insurance_photo", driver.documents?.insurance_photo)}
-                {renderDocSection("Road Permit (LATRA)", "road_permit_photo", driver.documents?.road_permit_photo)}
+                <DocumentCard
+                    title="Kitambulisho / ID"
+                    type="nida_photo"
+                    currentStorageId={driver.documents?.nida_photo}
+                />
+                <DocumentCard
+                    title="Leseni / License"
+                    type="license_photo"
+                    currentStorageId={driver.documents?.license_photo}
+                />
+                <DocumentCard
+                    title="Bima / Insurance"
+                    type="insurance_photo"
+                    currentStorageId={driver.documents?.insurance_photo}
+                />
+                <DocumentCard
+                    title="Kibali / Permit"
+                    type="road_permit_photo"
+                    currentStorageId={driver.documents?.road_permit_photo}
+                />
 
-                <View className="h-8" />
+                <View className="h-24" />
             </ScrollView>
+
+            <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200">
+                <TouchableOpacity
+                    onPress={handleSave}
+                    disabled={uploading}
+                    className={`w-full py-4 rounded-xl flex-row items-center justify-center ${uploading ? 'bg-gray-300' : 'bg-orange-600 shadow-lg shadow-orange-200'
+                        }`}
+                >
+                    {uploading ? (
+                        <ActivityIndicator color="white" />
+                    ) : (
+                        <>
+                            <CheckCircle size={24} color="white" className="mr-2" />
+                            <Text className="text-white text-lg font-bold ml-2">TUMA / SUBMIT</Text>
+                        </>
+                    )}
+                </TouchableOpacity>
+            </View>
         </SafeAreaView>
     );
 }

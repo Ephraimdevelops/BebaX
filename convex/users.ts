@@ -255,3 +255,37 @@ export const deleteUser = mutation({
 });
 
 
+// Get full user context (Profile + Driver + Org)
+export const getMyself = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile) {
+            return { profile: null, driver: null, org: null };
+        }
+
+        let driver = null;
+        if (profile.role === "driver") {
+            driver = await ctx.db
+                .query("drivers")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+                .first();
+        }
+
+        let org = null;
+        if (profile.orgId) {
+            org = await ctx.db.get(profile.orgId);
+        }
+
+        return { profile, driver, org };
+    },
+});

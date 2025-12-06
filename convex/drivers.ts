@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { encodeGeohash } from "./lib/geohash";
 
 // Enhanced driver registration with documents
 export const register = mutation({
@@ -39,7 +40,10 @@ export const register = mutation({
             verified: false,
 
             is_online: false,
-            current_location: args.location,
+            current_location: {
+                ...args.location,
+                geohash: encodeGeohash(args.location.lat, args.location.lng),
+            },
             last_location_update: new Date().toISOString(),
             rating: 5.0,
             total_trips: 0,
@@ -140,6 +144,7 @@ export const updateLocation = mutation({
         location: v.object({
             lat: v.number(),
             lng: v.number(),
+            geohash: v.string(), // Added geohash
         }),
     },
     handler: async (ctx, args) => {

@@ -8,6 +8,7 @@ export const trigger = mutation({
         location: v.object({
             lat: v.number(),
             lng: v.number(),
+            address: v.string(),
         }),
     },
     handler: async (ctx, args) => {
