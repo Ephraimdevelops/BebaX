@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "ec33a378-cb57-43b3-9ca1-4b5ce3ae8a88"
+      }
+    },
+    "android": {
+      "package": "com.ephraimngowi.nextjsmongotemplate"
+    }
+  }
+}

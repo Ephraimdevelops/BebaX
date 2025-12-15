@@ -2,9 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+
+// Convex & Clerk
+import { ClerkProvider, useAuth, useUser } from "@clerk/clerk-expo";
+import { ConvexReactClient, useQuery, useConvexAuth } from "convex/react";
+import { ConvexProviderWithClerk } from "convex/react-clerk";
+import Constants from 'expo-constants';
+import { tokenCache } from "./src/lib/cache";
 
 // Import screens
 import AuthScreen from './src/screens/AuthScreen';
@@ -15,11 +21,18 @@ import BookRideScreen from './src/screens/BookRideScreen';
 import RideDetailsScreen from './src/screens/RideDetailsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 
+// Import API (Assumes generated code is copied to src/convex/_generated)
+import { api } from "./src/convex/_generated/api";
+
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // API Configuration
-const API_BASE_URL = 'https://cargomate-4.preview.emergentagent.com/api';
+// export const API_BASE_URL = ...; // DEPRECATED: Use Convex
+
+const convex = new ConvexReactClient(Constants.expoConfig.extra.convexUrl, {
+  unsavedChangesWarning: false,
+});
 
 // Customer Tab Navigator
 function CustomerTabs() {
@@ -99,77 +112,43 @@ function AdminTabs() {
   );
 }
 
-export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+function MainApp() {
+  const { isAuthenticated } = useConvexAuth();
+  const { user } = useUser();
 
-  // Check for stored user on app load
-  useEffect(() => {
-    checkStoredUser();
-  }, []);
-
-  const checkStoredUser = async () => {
-    try {
-      const storedUser = await AsyncStorage.getItem('currentUser');
-      if (storedUser) {
-        setCurrentUser(JSON.parse(storedUser));
-      }
-    } catch (error) {
-      console.log('Error checking stored user:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleLogin = async (userData) => {
-    setCurrentUser(userData);
-    await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
-  };
-
-  const handleLogout = async () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          onPress: async () => {
-            setCurrentUser(null);
-            await AsyncStorage.removeItem('currentUser');
-          },
-        },
-      ]
-    );
-  };
-
-  if (isLoading) {
-    return null; // or a loading screen
-  }
+  // Fetch user profile from Convex to get role
+  // This requires the schema to have `users.getMyself` or similar
+  const userData = useQuery(api.users.getMyself);
 
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!currentUser ? (
-          <Stack.Screen name="Auth">
-            {props => <AuthScreen {...props} onLogin={handleLogin} />}
-          </Stack.Screen>
+        {!isAuthenticated ? (
+          <Stack.Screen name="Auth" component={AuthScreen} />
         ) : (
           <>
-            {currentUser.role === 'customer' && (
-              <Stack.Screen name="CustomerApp" component={CustomerTabs} />
+            {/* Show Loading if userData is not yet loaded */}
+            {userData === undefined ? (
+              <Stack.Screen name="Loading" component={() => <></>} />
+            ) : (
+              // Determine Role
+              <>
+                {(userData?.role === 'customer' || !userData?.role) && (
+                  <Stack.Screen name="CustomerApp" component={CustomerTabs} />
+                )}
+                {userData?.role === 'driver' && (
+                  <Stack.Screen name="DriverApp" component={DriverTabs} />
+                )}
+                {userData?.role === 'admin' && (
+                  <Stack.Screen name="AdminApp" component={AdminTabs} />
+                )}
+                <Stack.Screen
+                  name="RideDetails"
+                  component={RideDetailsScreen}
+                  options={{ headerShown: true, title: 'Ride Details' }}
+                />
+              </>
             )}
-            {currentUser.role === 'driver' && (
-              <Stack.Screen name="DriverApp" component={DriverTabs} />
-            )}
-            {currentUser.role === 'admin' && (
-              <Stack.Screen name="AdminApp" component={AdminTabs} />
-            )}
-            <Stack.Screen 
-              name="RideDetails" 
-              component={RideDetailsScreen}
-              options={{ headerShown: true, title: 'Ride Details' }}
-            />
           </>
         )}
       </Stack.Navigator>
@@ -177,5 +156,15 @@ export default function App() {
   );
 }
 
-// Export API base URL for use in other components
-export { API_BASE_URL };
+export default function App() {
+  return (
+    <ClerkProvider
+      publishableKey={Constants.expoConfig.extra.clerkPublishableKey}
+      tokenCache={tokenCache}
+    >
+      <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+        <MainApp />
+      </ConvexProviderWithClerk>
+    </ClerkProvider>
+  );
+}
