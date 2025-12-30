@@ -204,7 +204,7 @@ export default function DriverRegistration() {
                                     onChange={(e) => setPersonalInfo({ ...personalInfo, licenseNumber: e.target.value })}
                                     maxLength={20}
                                 />
-                                <p className="text-xs text-gray-500 mt-1">Your valid driver's license number</p>
+                                <p className="text-xs text-gray-500 mt-1">Your valid driver&apos;s license number</p>
                             </div>
 
                             <button
@@ -376,7 +376,7 @@ export default function DriverRegistration() {
                         <div>
                             <p className="text-sm font-medium text-blue-900">Verification Process</p>
                             <p className="text-xs text-blue-700 mt-1">
-                                Your application will be reviewed within 24-48 hours. We'll notify you via SMS once approved.
+                                Your application will be reviewed within 24-48 hours. We&apos;ll notify you via SMS once approved.
                             </p>
                         </div>
                     </div>

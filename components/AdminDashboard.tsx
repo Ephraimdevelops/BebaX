@@ -8,7 +8,7 @@ import { UserButton } from '@clerk/nextjs';
 import {
     Truck, Users, MapPin, DollarSign, TrendingUp,
     CheckCircle, XCircle, Clock, Eye, FileText, Image as ImageIcon,
-    Check, X, Car, UserCheck, ExternalLink
+    Check, X, Car, UserCheck, ExternalLink, ShieldAlert, Phone
 } from 'lucide-react';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
@@ -22,10 +22,12 @@ export default function AdminDashboard() {
     const allDrivers = useQuery(api.admin.getAllDrivers);
     const activeRides = useQuery(api.admin.getAllRidesEnriched, { status: "ongoing" });
     const stats = useQuery(api.admin.getAnalytics);
+    const sosAlerts = useQuery(api.sos.listActiveEnriched);
 
     // Mutations
     const verifyDriver = useMutation(api.admin.verifyDriver);
     const rejectDriver = useMutation(api.admin.rejectDriver);
+    const resolveSOS = useMutation(api.sos.resolve);
 
     const [selectedDriver, setSelectedDriver] = useState(null);
     const [verifying, setVerifying] = useState<string | null>(null);
@@ -147,6 +149,7 @@ export default function AdminDashboard() {
                                 { id: 'pending', label: 'Pending Drivers', count: pendingDrivers?.length },
                                 { id: 'drivers', label: 'All Drivers', count: allDrivers?.length },
                                 { id: 'rides', label: 'Active Rides', count: activeRides?.length },
+                                { id: 'sos', label: '🆘 SOS Alerts', count: sosAlerts?.length },
                             ].map((tab) => (
                                 <button
                                     key={tab.id}
@@ -338,6 +341,93 @@ export default function AdminDashboard() {
                                             <p className="text-xs text-gray-500">
                                                 Customer: {ride.customer_name} • Driver: {ride.driver_name}
                                             </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* SOS Alerts */}
+                    {activeTab === 'sos' && (
+                        <div className="p-6">
+                            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+                                <ShieldAlert className="w-6 h-6 text-red-600" />
+                                Active SOS Alerts
+                            </h2>
+                            {!sosAlerts || sosAlerts.length === 0 ? (
+                                <div className="text-center py-12">
+                                    <CheckCircle className="w-16 h-16 text-green-300 mx-auto mb-3" />
+                                    <p className="text-gray-600">No active emergencies</p>
+                                    <p className="text-sm text-gray-500">All users are safe!</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {sosAlerts.map((alert) => (
+                                        <div key={alert._id} className="border-2 border-red-300 bg-red-50 rounded-xl p-4">
+                                            <div className="flex items-start justify-between mb-3">
+                                                <div>
+                                                    <h3 className="font-bold text-lg text-red-700">
+                                                        🆘 {alert.user_name}
+                                                    </h3>
+                                                    <p className="text-sm text-gray-600">
+                                                        {alert.user_role === 'driver' ? '🚗 Driver' : '👤 Customer'}
+                                                    </p>
+                                                </div>
+                                                <span className="px-3 py-1 bg-red-600 text-white rounded-full text-xs font-bold animate-pulse">
+                                                    ACTIVE
+                                                </span>
+                                            </div>
+
+                                            <div className="mb-3">
+                                                <p className="text-sm font-medium text-gray-700">📍 Location:</p>
+                                                <p className="text-sm text-gray-600">{alert.location.address}</p>
+                                            </div>
+
+                                            {alert.ride_info && (
+                                                <div className="mb-3 p-3 bg-white rounded-lg">
+                                                    <p className="text-xs font-medium text-gray-500 mb-1">Related Ride:</p>
+                                                    <p className="text-sm">📍 {alert.ride_info.pickup}</p>
+                                                    <p className="text-sm">🎯 {alert.ride_info.dropoff}</p>
+                                                </div>
+                                            )}
+
+                                            <p className="text-xs text-gray-500 mb-3">
+                                                Triggered: {new Date(alert.created_at).toLocaleString()}
+                                            </p>
+
+                                            <div className="flex gap-2">
+                                                {alert.user_phone && (
+                                                    <a
+                                                        href={`tel:${alert.user_phone}`}
+                                                        className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors"
+                                                    >
+                                                        <Phone className="w-4 h-4" />
+                                                        Call User
+                                                    </a>
+                                                )}
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            await resolveSOS({ alert_id: alert._id });
+                                                            toast({
+                                                                title: 'Alert Resolved ✅',
+                                                                description: 'SOS alert has been marked as resolved.',
+                                                            });
+                                                        } catch (error) {
+                                                            toast({
+                                                                title: 'Error',
+                                                                description: 'Failed to resolve alert',
+                                                                variant: 'destructive',
+                                                            });
+                                                        }
+                                                    }}
+                                                    className="flex-1 flex items-center justify-center gap-2 bg-gray-800 text-white py-3 rounded-lg font-semibold hover:bg-gray-900 transition-colors"
+                                                >
+                                                    <CheckCircle className="w-4 h-4" />
+                                                    Resolve
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>

@@ -51,6 +51,8 @@ export const register = mutation({
             commission_rate: 0.10, // 10% commission
             payout_method: args.payout_method,
             payout_number: args.payout_number,
+            // Save vehicle type directly to driver profile
+            vehicle_type: args.vehicle_type as any, // Cast to any to match union type
             // Initialize wallet fields
             wallet_balance: 0,
             wallet_locked: false,
@@ -225,13 +227,13 @@ export const getCurrentDriver = query({
     },
 });
 
-// Get driver earnings
+// Get driver earnings with detailed breakdown
 export const getEarnings = query({
     args: {},
     handler: async (ctx) => {
         const identity = await ctx.auth.getUserIdentity();
         if (!identity) {
-            return { total: 0, today: 0, week: 0, month: 0 };
+            return { total: 0, today: 0, week: 0, month: 0, cash_collected: 0, commission_debt: 0, wallet_balance: 0 };
         }
 
         const driver = await ctx.db
@@ -240,7 +242,7 @@ export const getEarnings = query({
             .first();
 
         if (!driver) {
-            return { total: 0, today: 0, week: 0, month: 0 };
+            return { total: 0, today: 0, week: 0, month: 0, cash_collected: 0, commission_debt: 0, wallet_balance: 0 };
         }
 
         // Get completed rides
@@ -250,32 +252,128 @@ export const getEarnings = query({
             .filter((q) => q.eq(q.field("status"), "completed"))
             .collect();
 
-        const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
         let today = 0;
         let week = 0;
         let month = 0;
+        let previous_week = 0;
+        let cash_collected = 0;
+
+        // Date ranges
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const prevWeekStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
         for (const ride of rides) {
             const rideDate = new Date(ride.completed_at || ride.created_at);
-            const fare = ride.final_fare || ride.fare_estimate;
+            const fare = ride.final_fare || ride.fare_estimate || 0;
             const earnings = fare * (1 - driver.commission_rate);
 
             if (rideDate >= todayStart) today += earnings;
             if (rideDate >= weekStart) week += earnings;
+            if (rideDate >= prevWeekStart && rideDate < weekStart) previous_week += earnings;
             if (rideDate >= monthStart) month += earnings;
+
+            if (ride.payment_method === "cash" && ride.cash_collected) {
+                cash_collected += fare;
+            }
         }
 
+        // Commission debt logic (simplified for immediate display)
+        // In a real system, this would be query from a dedicated ledger/debt table
+        // Here we approximate based on wallet balance if it's negative
+        const wallet_balance = driver.wallet_balance || 0;
+        const commission_debt = wallet_balance < 0 ? Math.abs(wallet_balance) : 0;
+
         return {
-            total: driver.total_earnings,
+            total: driver.total_earnings || 0,
             today,
             week,
             month,
+            cash_collected,
+            commission_debt,
+            wallet_balance,
+            previous_week
         };
     },
+});
+
+// Pay commission debt (Mock for now)
+export const payCommission = mutation({
+    args: {
+        amount: v.number(),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!driver) {
+            throw new Error("Driver not found");
+        }
+
+        // 1. In a real app, verify mobile money transaction here
+        // 2. Update wallet balance
+        const newBalance = (driver.wallet_balance || 0) + args.amount;
+        const walletLocked = newBalance < -10000; // Example threshold
+
+        await ctx.db.patch(driver._id, {
+            wallet_balance: newBalance,
+            wallet_locked: walletLocked,
+        });
+
+        // 3. Log transaction
+        await ctx.db.insert("settlements", {
+            driver_clerk_id: identity.subject,
+            amount: args.amount,
+            method: "mpesa", // Mock default
+            status: "completed",
+            created_at: new Date().toISOString(),
+            metadata: { type: "commission_payment" }
+        });
+    },
+});
+
+// Get comprehensive driver profile
+export const getDriverProfile = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!driver) return null;
+
+        const userProfile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        // Get vehicle info if available
+        const vehicle = driver.fleet_id ? null : await ctx.db // Simple check, ideally query vehicles table
+            .query("vehicles")
+            .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
+            .first();
+
+        return {
+            driver,
+            user: userProfile,
+            vehicle
+        };
+    }
 });
 
 // Request payout
@@ -331,5 +429,52 @@ export const getDriverByClerkId = query({
             .query("drivers")
             .withIndex("by_clerk_id", (q) => q.eq("clerkId", args.clerkId))
             .first();
+    },
+});
+
+// Get document URLs for current driver
+export const getDocumentUrls = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const driver = await ctx.db
+            .query("drivers")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!driver || !driver.documents) {
+            return null;
+        }
+
+        const docs = driver.documents;
+        const urls: Record<string, string | null> = {
+            nida_photo: null,
+            license_photo: null,
+            insurance_photo: null,
+            road_permit_photo: null,
+        };
+
+        // Resolve each storage ID to a URL
+        if (docs.nida_photo) {
+            urls.nida_photo = await ctx.storage.getUrl(docs.nida_photo);
+        }
+        if (docs.license_photo) {
+            urls.license_photo = await ctx.storage.getUrl(docs.license_photo);
+        }
+        if (docs.insurance_photo) {
+            urls.insurance_photo = await ctx.storage.getUrl(docs.insurance_photo);
+        }
+        if (docs.road_permit_photo) {
+            urls.road_permit_photo = await ctx.storage.getUrl(docs.road_permit_photo);
+        }
+
+        return {
+            ...urls,
+            verified: driver.verified,
+        };
     },
 });

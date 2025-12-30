@@ -1,189 +1,443 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, Dimensions, Switch, Alert, FlatList, StatusBar, Image } from 'react-native';
-import MapView, { PROVIDER_DEFAULT, Marker } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { useMutation, useQuery } from 'convex/react';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, StyleSheet, Text, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Dimensions, Image, Animated, PanResponder, Linking, Modal } from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convex/_generated/api';
-import { customMapStyle } from '../../src/constants/mapStyle';
-import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
-import { useAuth } from '@clerk/clerk-expo';
 import { Colors } from '../../src/constants/Colors';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useRouter } from 'expo-router';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { customMapStyle } from '../../src/constants/mapStyle';
+import SOSButton from '../../components/Shared/SOSButton';
+import ChatScreen from '../../components/Shared/ChatScreen';
+import NavigationCard from '../../components/Driver/NavigationCard';
+import { MessageCircle } from 'lucide-react-native';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const SCREEN_HEIGHT = Dimensions.get('window').height;
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const COLLAPSED_HEIGHT = 130;
+const EXPANDED_HEIGHT = SCREEN_HEIGHT * 0.6;
 
-// Default Location: Dar es Salaam
-const DAR_ES_SALAAM = {
-    latitude: -6.7924,
-    longitude: 39.2083,
-    latitudeDelta: 0.0922,
-    longitudeDelta: 0.0421,
-};
-
-export default function DriverHome() {
-    const [location, setLocation] = useState(null);
-    const [isOnline, setIsOnline] = useState(false);
+export default function CockpitScreen() {
+    const { isSignedIn } = useAuth();
+    const router = useRouter();
     const insets = useSafeAreaInsets();
+    const mapRef = useRef<MapView>(null);
+    const { user } = useUser();
+    const [statusLoading, setStatusLoading] = useState(false);
+    const [sheetHeight] = useState(new Animated.Value(COLLAPSED_HEIGHT));
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [showChat, setShowChat] = useState(false);
 
-    // Real-time feeds
-    const openRides = useQuery(api.rides.getOpenRides) || [];
-    const acceptRide = useMutation(api.rides.acceptRide);
-    const { userId } = useAuth();
-    const userProfile = useQuery(api.users.getMyself);
+    // Queries
+    const driver = useQuery(api.drivers.getCurrentDriver);
+    const userProfile = useQuery(api.users.getCurrentProfile); // Fallback for unverified drivers
+    const activeRide = useQuery(api.rides.getDriverActiveRide);
+    const availableRides = useQuery(api.rides.listAvailableRides);
 
+    // Use driver data if available, otherwise use a minimal driver-like object from profile
+    const driverData = driver || (userProfile ? {
+        is_online: false,
+        verified: false,
+        rating: 5.0,
+        total_trips: 0,
+    } : null);
+
+    // Mutations
+    const setOnline = useMutation(api.drivers.setOnlineStatus);
+    const acceptRide = useMutation(api.rides.accept);
+    const updateRideStatus = useMutation(api.rides.updateStatus);
+    const updateLocation = useMutation(api.drivers.updateLocation);
+    const sendMessage = useMutation(api.messages.send);
+
+    // Location Tracking
     useEffect(() => {
-        (async () => {
+        let subscription: any;
+        const startTracking = async () => {
             let { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== 'granted') {
-                setLocation(DAR_ES_SALAAM);
-                return;
-            }
-            let loc = await Location.getCurrentPositionAsync({});
-            setLocation({
-                latitude: loc.coords.latitude,
-                longitude: loc.coords.longitude,
-                latitudeDelta: 0.015,
-                longitudeDelta: 0.0121,
-            });
-        })();
-    }, []);
+            if (status !== 'granted') return;
 
-    const handleToggleOnline = (val: boolean) => {
-        setIsOnline(val);
-        // NOTE: Wiring to actual driver status mutation would go here.
-        // e.g. updateDriverStatus({ id: driverId, status: val ? 'active' : 'inactive' });
+            subscription = await Location.watchPositionAsync(
+                { accuracy: Location.Accuracy.High, timeInterval: 10000, distanceInterval: 50 },
+                (location) => {
+                    const { latitude, longitude } = location.coords;
+                    updateLocation({
+                        location: {
+                            lat: latitude,
+                            lng: longitude,
+                            geohash: "gbsuv7", // DSM base
+                        }
+                    }).catch(err => console.log("Loc update failed", err));
+                }
+            );
+        };
+        if (isSignedIn && driverData?.is_online) {
+            startTracking();
+        }
+        return () => {
+            if (subscription) subscription.remove();
+        };
+    }, [isSignedIn, driverData?.is_online]);
+
+    // Sheet Pan Responder
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onPanResponderMove: (_, gesture) => {
+                if (gesture.dy < 0 && !isExpanded) {
+                    // Swiping up
+                    const newHeight = Math.min(EXPANDED_HEIGHT, COLLAPSED_HEIGHT - gesture.dy);
+                    sheetHeight.setValue(newHeight);
+                } else if (gesture.dy > 0 && isExpanded) {
+                    // Swiping down
+                    const newHeight = Math.max(COLLAPSED_HEIGHT, EXPANDED_HEIGHT - gesture.dy);
+                    sheetHeight.setValue(newHeight);
+                }
+            },
+            onPanResponderRelease: (_, gesture) => {
+                if (gesture.dy < -50 && !isExpanded) {
+                    expandSheet();
+                } else if (gesture.dy > 50 && isExpanded) {
+                    collapseSheet();
+                } else {
+                    // Snap back
+                    Animated.spring(sheetHeight, {
+                        toValue: isExpanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT,
+                        useNativeDriver: false,
+                    }).start();
+                }
+            },
+        })
+    ).current;
+
+    const expandSheet = () => {
+        Animated.spring(sheetHeight, {
+            toValue: EXPANDED_HEIGHT,
+            useNativeDriver: false,
+        }).start();
+        setIsExpanded(true);
     };
 
-    const handleAccept = async (rideId: string) => {
+    const collapseSheet = () => {
+        Animated.spring(sheetHeight, {
+            toValue: COLLAPSED_HEIGHT,
+            useNativeDriver: false,
+        }).start();
+        setIsExpanded(false);
+    };
+
+    const toggleOnline = async () => {
+        // Going online requires a verified driver record
+        if (!driver) {
+            Alert.alert(
+                "Complete Registration",
+                "To go online and accept rides, please complete your driver registration in the Profile section.",
+                [
+                    { text: "Later", style: "cancel" },
+                    { text: "Go to Profile", onPress: () => router.push('/(driver)/profile') }
+                ]
+            );
+            return;
+        }
+        setStatusLoading(true);
         try {
-            if (!userProfile?.driver?._id) {
-                Alert.alert("Error", "Driver profile not found.");
-                return;
-            }
-            await acceptRide({
-                ride_id: rideId,
-                driver_id: userProfile.driver._id // Assuming linked
-            });
-            Alert.alert("Success", "Ride Accepted! Navigate to pickup.");
-        } catch (e) {
-            console.error(e);
-            Alert.alert("Error", "Failed to accept ride.");
+            await setOnline({ is_online: !driverData.is_online });
+        } catch (err: any) {
+            Alert.alert("Error", err.message);
+        } finally {
+            setStatusLoading(false);
         }
     };
 
-    const renderRideRequest = ({ item }: { item: any }) => (
-        <View style={styles.requestCard}>
-            <LinearGradient
-                colors={['#ffffff', '#fcfcfc']}
-                style={styles.cardGradient}
-            >
-                {/* Header */}
-                <View style={styles.cardHeader}>
-                    <View style={styles.badge}>
-                        <Text style={styles.badgeText}>NEW REQUEST</Text>
-                    </View>
-                    <View style={styles.distanceBadge}>
-                        <Ionicons name="location-sharp" size={12} color={Colors.textDim} />
-                        <Text style={styles.distanceTag}>{item.distance} km</Text>
-                    </View>
-                </View>
+    const handleAccept = async (rideId: string) => {
+        // Accepting rides requires a verified driver record
+        if (!driver || !driver.verified) {
+            Alert.alert(
+                "Verification Required",
+                "To accept rides, your driver profile must be verified. Please complete your registration and wait for admin approval.",
+                [
+                    { text: "OK", style: "cancel" },
+                    { text: "Go to Profile", onPress: () => router.push('/(driver)/profile') }
+                ]
+            );
+            return;
+        }
+        try {
+            // @ts-ignore
+            await acceptRide({ ride_id: rideId });
+            Alert.alert("✅ Safari Imekubaliwa!", "Navigate to pickup location.");
+            collapseSheet();
+        } catch (err: any) {
+            Alert.alert("Error", err.message);
+        }
+    };
 
-                {/* Price */}
-                <Text style={styles.priceTag}>TZS {item.fare_estimate.toLocaleString()}</Text>
+    const handleStatusUpdate = async (status: string) => {
+        if (!activeRide) return;
+        try {
+            // @ts-ignore
+            await updateRideStatus({ ride_id: activeRide._id, status });
+        } catch (err: any) {
+            Alert.alert("Error", err.message);
+        }
+    };
 
-                {/* Route */}
-                <View style={styles.routeContainer}>
-                    <View style={styles.routeRow}>
-                        <View style={[styles.dot, { backgroundColor: Colors.primary }]} />
-                        <Text style={styles.routeText} numberOfLines={1}>{item.pickup_address || "Pickup Location"}</Text>
-                    </View>
-                    <View style={styles.verticalLine} />
-                    <View style={styles.routeRow}>
-                        <View style={[styles.dot, { backgroundColor: Colors.text }]} />
-                        <Text style={styles.routeText} numberOfLines={1}>{item.dropoff_address || "Dropoff Location"}</Text>
-                    </View>
-                </View>
+    const handleSendMessage = async (text: string) => {
+        if (!activeRide) return;
+        try {
+            // @ts-ignore
+            await sendMessage({ ride_id: activeRide._id, message: text, type: 'text' });
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
-                {/* Items Description - HIGHLIGHTED */}
-                {item.items_description ? (
-                    <View style={styles.itemsContainer}>
-                        <FontAwesome5 name="box" size={14} color={Colors.primary} style={{ marginTop: 2 }} />
-                        <Text style={styles.itemsText}>{item.items_description}</Text>
-                    </View>
-                ) : null}
+    const handleCallCustomer = () => {
+        if (activeRide?.customer_phone) {
+            Linking.openURL(`tel:${activeRide.customer_phone}`);
+        } else {
+            Alert.alert("Info", "Customer phone number not available.");
+        }
+    };
 
-                {/* Action */}
-                <TouchableOpacity style={styles.acceptButton} onPress={() => handleAccept(item._id)}>
-                    <Text style={styles.acceptButtonText}>ACCEPT RIDE</Text>
-                    <Ionicons name="arrow-forward" size={20} color="white" />
-                </TouchableOpacity>
-            </LinearGradient>
-        </View>
-    );
+    const handleNavigateToPickup = () => {
+        if (activeRide?.pickup_location) {
+            const { lat, lng } = activeRide.pickup_location;
+            const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+            Linking.openURL(url);
+        }
+    };
+
+    const handleNavigateToDropoff = () => {
+        if (activeRide?.dropoff_location) {
+            const { lat, lng } = activeRide.dropoff_location;
+            const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+            Linking.openURL(url);
+        }
+    };
+
+    // Still loading data
+    if (!driverData) {
+        return (
+            <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading Cockpit...</Text>
+            </View>
+        );
+    }
+
+    // Check if driver is verified (for showing banner)
+    const isVerified = driver?.verified ?? false;
+
+    const todayEarnings = 125000; // Mock - replace with real data
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="dark-content" />
+            {/* FULL SCREEN MAP */}
             <MapView
+                ref={mapRef}
+                style={StyleSheet.absoluteFillObject}
                 provider={PROVIDER_DEFAULT}
-                style={styles.map}
-                initialRegion={DAR_ES_SALAAM}
-                region={location || DAR_ES_SALAAM}
                 customMapStyle={customMapStyle}
                 showsUserLocation={true}
+                followsUserLocation={true}
+                initialRegion={{
+                    latitude: -6.7924,
+                    longitude: 39.2083,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                }}
             />
 
-            {/* HEADER - Floating Glass */}
-            {isOnline && (
-                <View style={[styles.header, { top: insets.top + 10 }]}>
-                    <View style={styles.statusRow}>
-                        <View style={styles.onlineDot} />
-                        <Text style={styles.statusText}>YOU ARE ONLINE</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => setIsOnline(false)} style={styles.offlineBtn}>
-                        <MaterialIcons name="power-settings-new" size={20} color="white" />
-                    </TouchableOpacity>
-                </View>
-            )}
+            {/* TOP STATUS HUD */}
+            <View style={[styles.topHud, { paddingTop: insets.top + 8 }]}>
+                {/* Logo */}
+                <Image
+                    source={require('../../assets/images/bebax_logo_black.png')}
+                    style={styles.logoImage}
+                />
 
-            {/* RIDE FEED - Bottom Sheet style */}
-            {isOnline && openRides.length > 0 && (
-                <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.05)', 'rgba(0,0,0,0.1)']}
-                    style={styles.feedWrapper}
-                    pointerEvents="box-none"
+                {/* Status Pill */}
+                <TouchableOpacity
+                    style={[styles.statusPill, driverData.is_online ? styles.statusOnline : styles.statusOffline]}
+                    onPress={toggleOnline}
+                    disabled={statusLoading}
                 >
-                    <FlatList
-                        data={openRides}
-                        keyExtractor={(item) => item._id}
-                        renderItem={renderRideRequest}
-                        contentContainerStyle={styles.feedContent}
-                        showsVerticalScrollIndicator={false}
-                    />
-                </LinearGradient>
-            )}
+                    {statusLoading ? (
+                        <ActivityIndicator size="small" color="white" />
+                    ) : (
+                        <>
+                            <View style={[styles.statusDot, driverData.is_online && styles.statusDotOnline]} />
+                            <Text style={styles.statusText}>
+                                {driverData.is_online ? "ONLINE" : "OFFLINE"}
+                            </Text>
+                        </>
+                    )}
+                </TouchableOpacity>
 
-            {/* OFFLINE MODAL */}
-            {!isOnline && (
-                <View style={styles.offlineContainer}>
-                    <LinearGradient
-                        colors={[Colors.surface, '#f8f9fa']}
-                        style={styles.offlineCard}
-                    >
-                        <View style={styles.offlineIconBox}>
-                            <MaterialIcons name="local-shipping" size={40} color={Colors.textDim} />
+                {/* Earnings Badge */}
+                <View style={styles.earningsBadge}>
+                    <Text style={styles.earningsValue}>Tsh {todayEarnings.toLocaleString()}</Text>
+                    <Text style={styles.earningsLabel}>Today</Text>
+                </View>
+            </View>
+
+            {/* INCOMING RIDE MODAL (Dominant) */}
+            {!activeRide && availableRides && availableRides.length > 0 && (
+                <View style={styles.incomingRideOverlay}>
+                    <View style={styles.incomingCard}>
+                        <View style={styles.incomingHeader}>
+                            <Text style={styles.incomingTitle}>🚨 INCOMING RIDE</Text>
+                            <Text style={styles.incomingPrice}>
+                                Tsh {availableRides[0]?.fare_estimate?.toLocaleString() || "0"}
+                            </Text>
                         </View>
-                        <Text style={styles.offlineTitle}>Ready to work?</Text>
-                        <Text style={styles.offlineSubtitle}>Go online to start receiving ride requests nearby.</Text>
 
-                        <TouchableOpacity style={styles.goOnlineButton} onPress={() => handleToggleOnline(true)}>
-                            <Text style={styles.goOnlineText}>GO ONLINE</Text>
+                        <View style={styles.incomingRoute}>
+                            <View style={styles.routePoint}>
+                                <View style={styles.pickupDot} />
+                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                    {availableRides[0]?.pickup_location?.address || "Pickup"}
+                                </Text>
+                            </View>
+                            <View style={styles.routeLine} />
+                            <View style={styles.routePoint}>
+                                <View style={styles.dropoffDot} />
+                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                    {availableRides[0]?.dropoff_location?.address || "Dropoff"}
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.incomingMeta}>
+                            <View style={styles.metaItem}>
+                                <MaterialIcons name="local-shipping" size={16} color={Colors.textDim} />
+                                <Text style={styles.metaText}>{availableRides[0]?.vehicle_type?.toUpperCase()}</Text>
+                            </View>
+                        </View>
+
+                        <TouchableOpacity
+                            style={styles.acceptButton}
+                            onPress={() => handleAccept(availableRides[0]?._id)}
+                        >
+                            <Text style={styles.acceptButtonText}>POKEA SAFARI</Text>
+                            <MaterialIcons name="check" size={24} color="white" />
                         </TouchableOpacity>
-                    </LinearGradient>
+                    </View>
                 </View>
             )}
+
+            {/* ACTIVE RIDE CARD */}
+            {activeRide && (
+                <View style={[styles.activeRideCard, { bottom: insets.bottom + 20 }]}>
+                    <View style={styles.activeHeader}>
+                        <Text style={styles.activeStatus}>{activeRide.status?.toUpperCase()}</Text>
+                        <View style={styles.actionButtons}>
+                            <TouchableOpacity style={styles.navButton} onPress={activeRide.status === 'accepted' ? handleNavigateToPickup : handleNavigateToDropoff}>
+                                <MaterialIcons name="navigation" size={20} color="white" />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.chatButton} onPress={() => setShowChat(true)}>
+                                <MessageCircle size={20} color="white" />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.callButton} onPress={handleCallCustomer}>
+                                <Ionicons name="call" size={20} color="white" />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    <View style={styles.activeRoute}>
+                        <Text style={styles.activeLabel}>Dropoff</Text>
+                        <Text style={styles.activeAddress} numberOfLines={2}>
+                            {activeRide.dropoff_location?.address}
+                        </Text>
+                    </View>
+
+                    {/* Action Buttons */}
+                    <View style={styles.activeActions}>
+                        {activeRide.status === 'accepted' && (
+                            <TouchableOpacity style={styles.actionBtn} onPress={() => handleStatusUpdate('loading')}>
+                                <Text style={styles.actionText}>NIMEFIKA</Text>
+                            </TouchableOpacity>
+                        )}
+                        {activeRide.status === 'loading' && (
+                            <TouchableOpacity style={styles.actionBtn} onPress={() => handleStatusUpdate('ongoing')}>
+                                <Text style={styles.actionText}>ANZA SAFARI</Text>
+                            </TouchableOpacity>
+                        )}
+                        {activeRide.status === 'ongoing' && (
+                            <TouchableOpacity style={[styles.actionBtn, styles.finishBtn]} onPress={() => handleStatusUpdate('delivered')}>
+                                <Text style={styles.actionText}>MALIZA</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                </View>
+            )}
+
+            {/* SOS Button - Always visible during active ride */}
+            {activeRide && <SOSButton rideId={activeRide._id} />}
+
+            {/* Chat Modal */}
+            <Modal
+                visible={showChat}
+                animationType="slide"
+                presentationStyle="pageSheet"
+                onRequestClose={() => setShowChat(false)}
+            >
+                {activeRide && user && (
+                    <ChatScreen
+                        rideId={activeRide._id}
+                        recipientName={activeRide.customer_name || 'Customer'}
+                        recipientPhone={activeRide.customer_phone}
+                        currentUserId={user.id}
+                        onClose={() => setShowChat(false)}
+                        quickReplies={["Niko njiani", "Nimefika", "Subiri kidogo", "Nitachelewa"]}
+                    />
+                )}
+            </Modal>
+
+            {/* BOTTOM STATUS BAR (Swipeable) */}
+            {!activeRide && (!availableRides || availableRides.length === 0) && (
+                <Animated.View
+                    style={[styles.bottomSheet, { height: sheetHeight, paddingBottom: insets.bottom }]}
+                    {...panResponder.panHandlers}
+                >
+                    <View style={styles.sheetHandle} />
+
+                    {/* Collapsed View */}
+                    <View style={styles.collapsedContent}>
+                        <View style={styles.statBox}>
+                            <Text style={styles.statValue}>0</Text>
+                            <Text style={styles.statLabel}>Safari Leo</Text>
+                        </View>
+                        <View style={styles.onlineIndicator}>
+                            <Text style={styles.onlineText}>
+                                {driverData.is_online ? "Unasubiri oda..." : "Washa app kupata kazi"}
+                            </Text>
+                        </View>
+                        <View style={styles.statBox}>
+                            <Text style={styles.statValue}>5.0</Text>
+                            <Text style={styles.statLabel}>Rating</Text>
+                        </View>
+                    </View>
+
+                    {/* Expanded View */}
+                    {isExpanded && (
+                        <ScrollView style={styles.expandedContent}>
+                            <Text style={styles.sectionTitle}>Oda Zinazosubiri</Text>
+                            <Text style={styles.emptyText}>Hakuna oda kwa sasa. Subiri kidogo...</Text>
+                        </ScrollView>
+                    )}
+                </Animated.View>
+            )}
+
+            {/* Job Opportunities FAB */}
+            <TouchableOpacity
+                style={styles.opportunitiesFab}
+                onPress={() => router.push('/(driver)/opportunities')}
+            >
+                <MaterialIcons name="work" size={24} color="white" />
+            </TouchableOpacity>
         </View>
     );
 }
@@ -193,231 +447,361 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: Colors.background,
     },
-    map: {
-        ...StyleSheet.absoluteFillObject,
-    },
-    header: {
-        position: 'absolute',
-        left: 20,
-        right: 20,
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 12,
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-        borderRadius: 24,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 10,
-        elevation: 10,
-    },
-    statusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 8,
-    },
-    onlineDot: {
-        width: 10,
-        height: 10,
-        borderRadius: 5,
-        backgroundColor: Colors.success,
-        marginRight: 10,
-        shadowColor: Colors.success,
-        shadowOpacity: 0.5,
-        shadowRadius: 4,
-    },
-    statusText: {
-        color: Colors.text,
-        fontWeight: '700',
-        fontSize: 14,
-        letterSpacing: 0.5,
-    },
-    offlineBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: '#FF3B30',
+    loadingContainer: {
+        flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        backgroundColor: Colors.background,
     },
-    feedWrapper: {
+    loadingText: {
+        marginTop: 16,
+        color: Colors.textDim,
+    },
+
+    // Top HUD
+    topHud: {
         position: 'absolute',
-        bottom: 0,
+        top: 0,
         left: 0,
         right: 0,
-        height: '65%',
-        justifyContent: 'flex-end',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingBottom: 12,
+        backgroundColor: 'rgba(255,255,255,0.95)',
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 5,
     },
-    feedContent: {
-        paddingHorizontal: 20,
-        paddingBottom: 40,
+    logoImage: {
+        width: 80,
+        height: 28,
+        resizeMode: 'contain',
     },
-    requestCard: {
-        marginBottom: 20,
-        borderRadius: 24,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.15,
-        shadowRadius: 15,
-        elevation: 10,
+    statusPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderRadius: 20,
+    },
+    statusOnline: {
+        backgroundColor: Colors.success,
+    },
+    statusOffline: {
+        backgroundColor: '#666',
+    },
+    statusDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: 'rgba(255,255,255,0.5)',
+        marginRight: 8,
+    },
+    statusDotOnline: {
         backgroundColor: 'white',
     },
-    cardGradient: {
+    statusText: {
+        color: 'white',
+        fontWeight: '800',
+        fontSize: 12,
+        letterSpacing: 1,
+    },
+    earningsBadge: {
+        alignItems: 'flex-end',
+    },
+    earningsValue: {
+        fontSize: 16,
+        fontWeight: '900',
+        color: Colors.text,
+    },
+    earningsLabel: {
+        fontSize: 10,
+        color: Colors.textDim,
+        fontWeight: '600',
+    },
+
+    // Incoming Ride Modal (Dominant)
+    incomingRideOverlay: {
+        position: 'absolute',
+        bottom: 100,
+        left: 16,
+        right: 16,
+        zIndex: 100,
+    },
+    incomingCard: {
+        backgroundColor: 'white',
         borderRadius: 24,
         padding: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.25,
+        shadowRadius: 20,
+        elevation: 15,
+        borderWidth: 2,
+        borderColor: Colors.success,
     },
-    cardHeader: {
+    incomingHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 16,
     },
-    badge: {
-        backgroundColor: '#FFF0EB',
+    incomingTitle: {
+        fontSize: 16,
+        fontWeight: '900',
+        color: Colors.text,
+        letterSpacing: 0.5,
+    },
+    incomingPrice: {
+        fontSize: 20,
+        fontWeight: '900',
+        color: Colors.success,
+    },
+    incomingRoute: {
+        marginBottom: 16,
+    },
+    routePoint: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    pickupDot: {
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: Colors.primary,
+        marginRight: 12,
+    },
+    dropoffDot: {
+        width: 12,
+        height: 12,
+        borderRadius: 3,
+        backgroundColor: Colors.text,
+        marginRight: 12,
+    },
+    routeLine: {
+        width: 2,
+        height: 24,
+        backgroundColor: '#E0E0E0',
+        marginLeft: 5,
+        marginVertical: 4,
+    },
+    routeAddress: {
+        flex: 1,
+        fontSize: 14,
+        color: Colors.text,
+        fontWeight: '500',
+    },
+    incomingMeta: {
+        flexDirection: 'row',
+        marginBottom: 16,
+    },
+    metaItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F5F5F5',
         paddingVertical: 6,
         paddingHorizontal: 12,
         borderRadius: 12,
     },
-    badgeText: {
-        color: Colors.primary,
-        fontSize: 11,
-        fontWeight: '800',
-        letterSpacing: 0.5,
-    },
-    distanceBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F5F5F5',
-        paddingVertical: 4,
-        paddingHorizontal: 8,
-        borderRadius: 12,
-    },
-    distanceTag: {
-        color: Colors.textDim,
+    metaText: {
+        marginLeft: 6,
         fontSize: 12,
-        fontWeight: '600',
-        marginLeft: 4,
+        fontWeight: '700',
+        color: Colors.textDim,
     },
-    priceTag: {
-        color: Colors.text,
-        fontSize: 28,
-        fontWeight: '800', // Heavy bold
-        marginBottom: 16,
-        letterSpacing: -0.5,
-    },
-    routeContainer: {
-        marginBottom: 16,
-        backgroundColor: '#FCFCFC',
-        padding: 12,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: '#F0F0F0',
-    },
-    routeRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 6 },
-    dot: { width: 8, height: 8, borderRadius: 4, marginRight: 12 },
-    verticalLine: { width: 2, height: 16, backgroundColor: '#E0E0E0', marginLeft: 3, marginVertical: 2 },
-    routeText: { color: Colors.text, fontSize: 15, fontWeight: '500', flex: 1 },
-
-    // Items Box
-    itemsContainer: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        backgroundColor: '#FFF8F4', // Warm tint
-        padding: 12,
-        borderRadius: 12,
-        marginBottom: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 99, 71, 0.1)',
-    },
-    itemsText: {
-        color: Colors.text,
-        fontSize: 14,
-        fontWeight: '600',
-        marginLeft: 10,
-        flex: 1,
-        lineHeight: 20,
-    },
-
     acceptButton: {
-        backgroundColor: Colors.primary,
-        paddingVertical: 16,
-        borderRadius: 18,
+        backgroundColor: Colors.success,
         flexDirection: 'row',
-        justifyContent: 'center',
         alignItems: 'center',
-        shadowColor: Colors.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 5,
+        justifyContent: 'center',
+        paddingVertical: 16,
+        borderRadius: 16,
     },
     acceptButtonText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 16,
-        letterSpacing: 0.5,
+        color: 'white',
+        fontSize: 18,
+        fontWeight: '900',
         marginRight: 8,
+        letterSpacing: 1,
     },
 
-    // Offline
-    offlineContainer: {
+    // Active Ride Card
+    activeRideCard: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        backgroundColor: 'white',
+        borderRadius: 24,
+        padding: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -5 },
+        shadowOpacity: 0.15,
+        shadowRadius: 15,
+        elevation: 10,
+    },
+    activeHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    activeStatus: {
+        fontSize: 14,
+        fontWeight: '900',
+        color: Colors.primary,
+        letterSpacing: 1,
+    },
+    actionButtons: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    navButton: {
+        backgroundColor: Colors.primary,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    callButton: {
+        backgroundColor: Colors.success,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    chatButton: {
+        backgroundColor: Colors.primary,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    activeRoute: {
+        marginBottom: 16,
+    },
+    activeLabel: {
+        fontSize: 12,
+        color: Colors.textDim,
+        fontWeight: '600',
+        marginBottom: 4,
+    },
+    activeAddress: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: Colors.text,
+    },
+    activeActions: {
+        marginBottom: 16,
+    },
+    actionBtn: {
+        backgroundColor: Colors.primary,
+        paddingVertical: 16,
+        borderRadius: 14,
+        alignItems: 'center',
+    },
+    finishBtn: {
+        backgroundColor: Colors.success,
+    },
+    actionText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+
+    // Bottom Sheet
+    bottomSheet: {
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
-        padding: 20,
-        paddingBottom: 40,
-    },
-    offlineCard: {
         backgroundColor: 'white',
-        borderRadius: 32,
-        padding: 32,
-        alignItems: 'center',
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: -4 },
+        borderTopLeftRadius: 28,
+        borderTopRightRadius: 28,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -5 },
         shadowOpacity: 0.1,
-        shadowRadius: 20,
-        elevation: 20,
+        shadowRadius: 15,
+        elevation: 10,
     },
-    offlineIconBox: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: '#F5F5F5',
-        justifyContent: 'center',
+    sheetHandle: {
+        width: 40,
+        height: 5,
+        backgroundColor: '#E0E0E0',
+        borderRadius: 3,
+        alignSelf: 'center',
+        marginTop: 12,
+        marginBottom: 16,
+    },
+    collapsedContent: {
+        flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 20,
+        justifyContent: 'space-between',
+        paddingHorizontal: 24,
     },
-    offlineTitle: {
+    statBox: {
+        alignItems: 'center',
+    },
+    statValue: {
         fontSize: 22,
-        fontWeight: '800',
+        fontWeight: '900',
         color: Colors.text,
-        marginBottom: 8,
     },
-    offlineSubtitle: {
-        fontSize: 15,
+    statLabel: {
+        fontSize: 11,
+        color: Colors.textDim,
+        fontWeight: '600',
+    },
+    onlineIndicator: {
+        flex: 1,
+        alignItems: 'center',
+        paddingHorizontal: 16,
+    },
+    onlineText: {
+        fontSize: 13,
         color: Colors.textDim,
         textAlign: 'center',
-        marginBottom: 24,
-        lineHeight: 22,
-        paddingHorizontal: 20,
+        fontWeight: '500',
     },
-    goOnlineButton: {
-        width: '100%',
-        backgroundColor: Colors.text, // Black button for sleek look
-        paddingVertical: 18,
-        borderRadius: 20,
+    expandedContent: {
+        flex: 1,
+        paddingHorizontal: 24,
+        paddingTop: 20,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: '800',
+        color: Colors.text,
+        marginBottom: 16,
+    },
+    emptyText: {
+        textAlign: 'center',
+        color: Colors.textDim,
+        fontSize: 14,
+    },
+    opportunitiesFab: {
+        position: 'absolute',
+        bottom: 180,
+        left: 20,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: '#6366F1',
+        justifyContent: 'center',
         alignItems: 'center',
-        shadowColor: "#000",
+        shadowColor: '#6366F1',
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 10,
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
     },
-    goOnlineText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: 'bold',
-        letterSpacing: 1,
-    }
 });

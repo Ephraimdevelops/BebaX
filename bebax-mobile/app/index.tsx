@@ -1,13 +1,46 @@
 import { Redirect } from "expo-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../src/convex/_generated/api";
 import { useAuth } from "@clerk/clerk-expo";
 import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { Colors } from "../src/constants/Colors";
+import { useEffect, useState } from "react";
+
+// ===== THE TRAFFIC COP =====
+// Routes users based on role and ensures profile exists
 
 export default function Index() {
     const { isLoaded, isSignedIn } = useAuth();
-    const userData = useQuery(api.users.getMyself);
+    const [syncComplete, setSyncComplete] = useState(false);
+
+    // The Bouncer - ensures profile exists (doesn't overwrite existing roles!)
+    const syncUser = useMutation(api.users.syncUser);
+
+    // Get user data 
+    const userData = useQuery(
+        api.users.getMyself,
+        isSignedIn ? {} : "skip"
+    );
+
+    // Sync user profile when signed in (only if no profile exists)
+    useEffect(() => {
+        const doSync = async () => {
+            // Only create profile if signed in, sync not done, AND we know profile doesn't exist
+            // This prevents overwriting driver profiles created during signup
+            if (isSignedIn && !syncComplete && userData !== undefined) {
+                if (userData?.profile === null) {
+                    try {
+                        console.log("🔄 Creating new user profile via syncUser...");
+                        await syncUser({});
+                    } catch (error) {
+                        console.error("Sync failed:", error);
+                    }
+                }
+                setSyncComplete(true);
+            }
+        };
+        doSync();
+    }, [isSignedIn, syncComplete, userData]);
 
     // Show loading while Clerk initializes
     if (!isLoaded) {
@@ -20,17 +53,50 @@ export default function Index() {
         );
     }
 
-    // If signed in, redirect based on role
-    if (isSignedIn && userData) {
-        if (userData.role === "driver") {
+    // Not signed in - go to welcome/auth
+    if (!isSignedIn) {
+        return <Redirect href="/(auth)/welcome" />;
+    }
+
+    // Waiting for sync or data
+    if (!syncComplete || userData === undefined) {
+        return (
+            <View style={styles.container}>
+                <ActivityIndicator color={Colors.primary} size="large" />
+                <Text style={styles.tagline}>LOADING...</Text>
+            </View>
+        );
+    }
+
+    // ===== THE TRAFFIC COP ROUTING =====
+    const profile = userData?.profile;
+
+    // Debug log
+    console.log("🚦 Traffic Cop - Email:", profile?.email);
+    console.log("🚦 Traffic Cop - Role:", profile?.role);
+
+    // If profile exists, route based on role
+    if (profile) {
+        // Driver → Cockpit
+        if (profile.role === "driver") {
+            console.log("🚛 Redirecting to Driver Cockpit");
             return <Redirect href="/(driver)/cockpit" />;
         }
-        if (userData.role === "admin") {
+
+        // Admin → Admin Home
+        if (profile.role === "admin") {
+            console.log("🔑 Redirecting to Admin Home");
             return <Redirect href="/(admin)/home" />;
+        }
+
+        // Customer without phone → Force profile edit
+        if (profile.role === "customer" && (!profile.phone || profile.phone === "")) {
+            return <Redirect href="/(customer)/profile?edit=true" />;
         }
     }
 
-    // DEFAULT: Let everyone (guest or customer) see the customer dashboard
+    // DEFAULT: Customer dashboard
+    console.log("👤 Redirecting to Customer Dashboard");
     return <Redirect href="/(customer)/dashboard" />;
 }
 

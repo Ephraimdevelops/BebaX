@@ -24,6 +24,46 @@ const sanitizeString = (str: string, maxLength: number = 200): string => {
     return str.trim().substring(0, maxLength);
 };
 
+// ===== THE BOUNCER =====
+// Universal Sync: Ensures every authenticated user has a profile
+export const syncUser = mutation({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        // Check if profile exists
+        const existingProfile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (existingProfile) {
+            // Profile exists - return it
+            return existingProfile;
+        }
+
+        // CREATE NEW PROFILE - The Bouncer lets them in
+        const newProfile = {
+            clerkId: identity.subject,
+            name: identity.name || identity.givenName || "User",
+            email: identity.email || "",
+            role: "customer" as const, // Default to customer
+            phone: "", // Will be captured later via PhoneCaptureModal or profile edit
+            rating: 5.0,
+            totalRides: 0,
+            created_at: new Date().toISOString(),
+        };
+
+        const profileId = await ctx.db.insert("userProfiles", newProfile);
+        const profile = await ctx.db.get(profileId);
+
+        return profile;
+    },
+});
+
 // Create or update user profile with validation
 export const createOrUpdateProfile = mutation({
     args: {
@@ -93,6 +133,29 @@ export const createOrUpdateProfile = mutation({
     },
 });
 
+// DEV HELPER: Set current user's role (authenticated)
+export const setMyRole = mutation({
+    args: { role: v.union(v.literal("customer"), v.literal("driver"), v.literal("admin")) },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile) {
+            throw new Error("Profile not found");
+        }
+
+        await ctx.db.patch(profile._id, { role: args.role });
+        return `Your role is now: ${args.role}`;
+    },
+});
+
 // Get current user profile
 export const getCurrentProfile = query({
     args: {},
@@ -131,6 +194,7 @@ export const updateProfile = mutation({
         phone: v.optional(v.string()),
         email: v.optional(v.string()),
         profilePhoto: v.optional(v.string()),
+        emergencyContact: v.optional(v.string()),
         defaultAddress: v.optional(v.object({
             lat: v.number(),
             lng: v.number(),
@@ -143,13 +207,26 @@ export const updateProfile = mutation({
             throw new Error("Not authenticated");
         }
 
-        const profile = await ctx.db
+        let profile = await ctx.db
             .query("userProfiles")
             .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
             .first();
 
+        // If profile doesn't exist, create a basic customer profile
         if (!profile) {
-            throw new Error("Profile not found");
+            const newProfileId = await ctx.db.insert("userProfiles", {
+                clerkId: identity.subject,
+                role: "customer",
+                name: identity.name || identity.givenName || "User",
+                phone: args.phone || "",
+                rating: 5.0,
+                totalRides: 0,
+                created_at: new Date().toISOString(),
+            });
+            profile = await ctx.db.get(newProfileId);
+            if (!profile) {
+                throw new Error("Failed to create profile");
+            }
         }
 
         const updates: any = {};
@@ -169,6 +246,14 @@ export const updateProfile = mutation({
         if (args.email) {
             validateEmail(args.email);
             updates.email = args.email;
+        }
+
+        if (args.emergencyContact) {
+            // Validate emergency contact as phone number
+            const digitsOnly = args.emergencyContact.replace(/\D/g, '');
+            if (digitsOnly.length >= 9 && digitsOnly.length <= 15) {
+                updates.emergencyContact = args.emergencyContact;
+            }
         }
 
         if (args.profilePhoto) {
@@ -192,6 +277,44 @@ export const updateProfile = mutation({
 
         await ctx.db.patch(profile._id, updates);
         return profile._id;
+    },
+});
+
+// Update profile photo from storage ID
+export const saveProfilePhoto = mutation({
+    args: { storageId: v.id("_storage") },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const url = await ctx.storage.getUrl(args.storageId);
+        if (!url) {
+            throw new Error("Failed to get image URL");
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (profile) {
+            await ctx.db.patch(profile._id, { profilePhoto: url });
+        } else {
+            // Should not happen for authenticated users usually due to syncUser, but handle it
+            await ctx.db.insert("userProfiles", {
+                clerkId: identity.subject,
+                role: "customer",
+                name: identity.name || "User",
+                phone: "",
+                rating: 5.0,
+                totalRides: 0,
+                profilePhoto: url,
+                created_at: new Date().toISOString(),
+            });
+        }
+        return url;
     },
 });
 

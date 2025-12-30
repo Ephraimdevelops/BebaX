@@ -36,6 +36,7 @@
   ],
   "exclude": [
     "node_modules",
-    "native"
+    "native",
+    "bebax-mobile"
   ]
 }

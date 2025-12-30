@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { View, StyleSheet, Text, TouchableOpacity, Dimensions, ActivityIndicator, Alert, TextInput, ScrollView, Image, Platform, Keyboard, Modal, Animated } from 'react-native';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import * as Location from 'expo-location';
-import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { GooglePlacesAutocomplete, GooglePlacesAutocompleteRef } from 'react-native-google-places-autocomplete'; // Fixed Type Import
 import Link from 'expo-router/link';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
@@ -18,12 +18,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 const GOOGLE_API_KEY = Constants.expoConfig?.extra?.googleMapsApiKey;
 const { width, height } = Dimensions.get('window');
 
-const vehicles = [
-    { id: 'boda', label: 'Boda', price: 2000, eta: '3 min', image: require('../../assets/images/boda.png') },
-    { id: 'bajaji', label: 'Bajaji', price: 3000, eta: '5 min', image: require('../../assets/images/bajaji.png') },
-    { id: 'classic', label: 'Classic', price: 5000, eta: '7 min', image: require('../../assets/images/car.png') },
-    { id: 'boxbody', label: 'Truck', price: 15000, eta: '12 min', image: require('../../assets/images/truck.png') },
-];
+import { VEHICLE_FLEET } from '../../src/constants/vehicleRegistry';
+import { DEEP_ASPHALT } from '../../src/components/VehicleIcons'; // Imported constant
+
+// Map fleet to UI structure (adding mock ETA for now)
+const vehicles = VEHICLE_FLEET.map(v => ({
+    id: v.id,
+    label: v.label,
+    price: v.baseFare,
+    eta: '5 min', // Mock ETA
+    image: v.image // 3D Asset from registry
+}));
 
 interface VehicleCardProps {
     type: string;
@@ -62,27 +67,36 @@ export default function CustomerHome() {
     const insets = useSafeAreaInsets();
 
     // Search Focus Refs
-    const pickupRef = useRef<GooglePlacesAutocomplete>(null);
-    const dropoffRef = useRef<GooglePlacesAutocomplete>(null);
+    const pickupRef = useRef<GooglePlacesAutocompleteRef>(null);
+    const dropoffRef = useRef<GooglePlacesAutocompleteRef>(null);
 
     // State
     const [location, setLocation] = useState<Location.LocationObject | null>(null);
     const [pickup, setPickup] = useState<{ lat: number; lng: number; address: string } | null>(null);
     const [dropoff, setDropoff] = useState<{ lat: number; lng: number; address: string } | null>(null);
 
+    // LIVE DRIVERS QUERY
+    const nearbyDrivers = useQuery(api.rides.getNearbyDrivers,
+        location ? {
+            lat: location.coords.latitude,
+            lng: location.coords.longitude,
+            radiusKm: 10
+        } : "skip" // Skip if no location yet
+    );
+
     // 'search-focus' means the user is typing in a full-screen mode.
     const [mode, setMode] = useState<'default' | 'search-focus' | 'finding'>('default');
     // Which field is currently being edited in focus mode?
     const [activeField, setActiveField] = useState<'pickup' | 'dropoff'>('dropoff');
 
-    const [vehicleType, setVehicleType] = useState<string>('bajaji');
-    const [itemsDescription, setItemsDescription] = useState(''); // New State
+    const [vehicleType, setVehicleType] = useState<string>('boda'); // Default to Boda
+    const [itemsDescription, setItemsDescription] = useState('');
     const [isBooking, setIsBooking] = useState(false);
     const [showPhoneModal, setShowPhoneModal] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet'>('cash');
-    const [insuranceSelected, setInsuranceSelected] = useState(false);
+    // const [insuranceSelected, setInsuranceSelected] = useState(false); // HIDING INSURANCE FOR NOW
 
-    const createRide = useMutation(api.rides.createRide);
+    const createRide = useMutation(api.rides.create);
     const userProfile = useQuery(api.users.getCurrentProfile, {});
     const updateProfile = useMutation(api.users.updateProfile);
 
@@ -131,13 +145,12 @@ export default function CustomerHome() {
 
             // Creating ride
             const rideId = await createRide({
-                pickup: { lat: pickup.lat, lng: pickup.lng, address: pickup.address },
-                dropoff: { lat: dropoff.lat, lng: dropoff.lng, address: dropoff.address },
-                vehicleType: vehicleType,
-                price: vehicles.find(v => v.id === vehicleType)?.price || 0,
-                paymentMethod: paymentMethod,
-                // insurance: insuranceSelected,
-                itemsDescription: itemsDescription // Passing description
+                pickup_location: { lat: pickup.lat, lng: pickup.lng, address: pickup.address },
+                dropoff_location: { lat: dropoff.lat, lng: dropoff.lng, address: dropoff.address },
+                vehicle_type: vehicleType as any, // Cast to match union type
+                fare_estimate: vehicles.find(v => v.id === vehicleType)?.price || 0,
+                payment_method: paymentMethod,
+                cargo_details: itemsDescription // Passing description
             });
 
             setMode('finding');
@@ -198,10 +211,10 @@ export default function CustomerHome() {
 
     return (
         <View style={styles.container}>
-            {/* MAP LAYER */}
+            {/* MAP LAYER - FULL SCREEN BACKGROUND */}
             <MapView
                 ref={mapRef}
-                style={styles.map}
+                style={[styles.map, { marginBottom: mode === 'default' ? 200 : 0 }]} // Push map up slightly when overlay is valid? No, let's keep it full screen
                 provider={PROVIDER_DEFAULT}
                 customMapStyle={customMapStyle}
                 showsUserLocation={true}
@@ -214,11 +227,25 @@ export default function CustomerHome() {
             >
                 {pickup && <Marker coordinate={{ latitude: pickup.lat, longitude: pickup.lng }} title="Pickup" pinColor={Colors.primary} />}
                 {dropoff && <Marker coordinate={{ latitude: dropoff.lat, longitude: dropoff.lng }} title="Dropoff" pinColor={Colors.text} />}
-                {pickup && mode === 'default' && (
-                    <Marker coordinate={{ latitude: pickup.lat + 0.002, longitude: pickup.lng + 0.002 }} rotation={45}>
-                        <Image source={require('../../assets/images/bajaji.png')} style={{ width: 30, height: 30 }} resizeMode="contain" />
-                    </Marker>
-                )}
+
+                {/* LIVE DRIVER MARKERS */}
+                {nearbyDrivers?.map((driver: any) => {
+                    const vehicleAsset = VEHICLE_FLEET.find(v => v.id === driver.vehicle_type)?.image;
+                    return (
+                        <Marker
+                            key={driver._id}
+                            coordinate={{ latitude: driver.location.lat, longitude: driver.location.lng }}
+                            rotation={driver.heading || 0}
+                            anchor={{ x: 0.5, y: 0.5 }}
+                        >
+                            <Image
+                                source={vehicleAsset || require('../../assets/images/vehicles/boda.png')}
+                                style={{ width: 40, height: 40 }}
+                                resizeMode="contain"
+                            />
+                        </Marker>
+                    )
+                })}
             </MapView>
 
             {/* HEADER / MENU BUTTON (Hidden if search focus) */}
@@ -272,7 +299,6 @@ export default function CustomerHome() {
                             }}
                             fetchDetails={true}
                             enablePoweredByContainer={false}
-                            autoFocus={true}
                             styles={{
                                 container: { flex: 0 },
                                 textInput: styles.focusInput,
@@ -290,116 +316,75 @@ export default function CustomerHome() {
                 </View>
             )}
 
-            {/* PREMIUM BOTTOM SHEET (Fleet & Actions) */}
+            {/* FLOATING BOTTOM SHEET (Fleet & Actions) - REFACTORED */}
             {mode === 'default' && (
-                <View style={[styles.bottomContainer, { paddingBottom: insets.bottom }]}>
+                <View style={[styles.floatingBottomContainer, { paddingBottom: insets.bottom }]}>
                     <View style={styles.bottomSheetHandle} />
 
-                    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-                        {/* Items Description Input */}
-                        <View style={styles.itemsInputContainer}>
-                            <View style={styles.itemsIconBox}>
-                                <FontAwesome5 name="box-open" size={16} color={Colors.primary} />
-                            </View>
-                            <TextInput
-                                style={styles.itemsInput}
-                                placeholder="What are you moving? (e.g., Sofa)"
-                                placeholderTextColor={Colors.textDim}
-                                value={itemsDescription}
-                                onChangeText={setItemsDescription}
+                    {/* Fleet Selector (Horizontal Strip) */}
+                    <Text style={styles.sectionTitle}>Choose Fleet</Text>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.vehicleList}
+                        decelerationRate="fast"
+                    >
+                        {vehicles.map((v) => (
+                            <VehicleCard
+                                key={v.id}
+                                type={v.id as any}
+                                label={v.label}
+                                price={v.price}
+                                eta={v.eta}
+                                imageSource={v.image}
+                                selected={vehicleType === v.id}
+                                onSelect={() => setVehicleType(v.id)}
                             />
-                        </View>
-
-                        {/* Fleet Title */}
-                        <Text style={styles.sectionTitle}>Choose Fleet</Text>
-
-                        {/* Vehicles */}
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.vehicleList}
-                            decelerationRate="fast"
-                            snapToInterval={156} // Adjusted for new card width + margin
-                        >
-                            {vehicles.map((v) => (
-                                <VehicleCard
-                                    key={v.id}
-                                    type={v.id as any}
-                                    label={v.label}
-                                    price={v.price}
-                                    eta={v.eta}
-                                    imageSource={v.image}
-                                    selected={vehicleType === v.id}
-                                    onSelect={() => setVehicleType(v.id)}
-                                />
-                            ))}
-                        </ScrollView>
-
-                        {/* PREMIUM OPTIONS AREA */}
-                        <View style={styles.premiumOptions}>
-                            {/* Insurance Card */}
-                            <TouchableOpacity
-                                style={[styles.insuranceCard, insuranceSelected && styles.insuranceActive]}
-                                onPress={() => setInsuranceSelected(!insuranceSelected)}
-                                activeOpacity={0.9}
-                            >
-                                <View style={[styles.shieldIconData, insuranceSelected && { backgroundColor: Colors.primary }]}>
-                                    <FontAwesome5 name="shield-alt" size={18} color={insuranceSelected ? "white" : Colors.textDim} />
-                                </View>
-                                <View style={styles.insuranceTextContainer}>
-                                    <Text style={styles.insuranceTitle}>Trip Protection</Text>
-                                    <Text style={styles.insuranceSubtitle}>
-                                        {insuranceSelected ? "Your goods are covered up to 5M Tsh." : "Cover damage or loss for just Tsh 500."}
-                                    </Text>
-                                </View>
-                                {insuranceSelected ? (
-                                    <Ionicons name="checkmark-circle" size={24} color={Colors.primary} />
-                                ) : (
-                                    <View style={styles.addBtn}>
-                                        <Text style={styles.addBtnText}>ADD</Text>
-                                    </View>
-                                )}
-                            </TouchableOpacity>
-
-                            {/* Payment Method (Compacted) */}
-                            <TouchableOpacity
-                                style={styles.paymentSelector}
-                                onPress={() => setPaymentMethod(paymentMethod === 'cash' ? 'wallet' : 'cash')}
-                                activeOpacity={0.7}
-                            >
-                                <View style={styles.paymentInfo}>
-                                    <View style={[styles.paymentIconData, paymentMethod === 'wallet' ? { backgroundColor: Colors.primary } : {}]}>
-                                        <Ionicons
-                                            name={paymentMethod === 'cash' ? "cash" : "wallet"}
-                                            size={20}
-                                            color={paymentMethod === 'wallet' ? "white" : Colors.text}
-                                        />
-                                    </View>
-                                    <View>
-                                        <Text style={styles.paymentLabel}>Payment Method</Text>
-                                        <Text style={styles.paymentValue}>{paymentMethod === 'cash' ? 'Cash' : 'Wallet'}</Text>
-                                    </View>
-                                </View>
-                                <MaterialIcons name="chevron-right" size={24} color={Colors.textDim} />
-                            </TouchableOpacity>
-
-                            {/* Confirm Button */}
-                            <TouchableOpacity
-                                style={styles.bookingButton}
-                                onPress={handleBookRide}
-                                disabled={isBooking}
-                            >
-                                {isBooking ? <ActivityIndicator color="white" /> : (
-                                    <View style={styles.btnContent}>
-                                        <Text style={styles.btnText}>Confirm & Book</Text>
-                                        <Text style={styles.btnSubText}>
-                                            {vehicles.find(v => v.id === vehicleType)?.label} • {vehicles.find(v => v.id === vehicleType)?.eta}
-                                        </Text>
-                                    </View>
-                                )}
-                            </TouchableOpacity>
-                        </View>
+                        ))}
                     </ScrollView>
+
+                    {/* Simple Bottom Actions */}
+                    <View style={styles.simpleActionRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.paymentSelector,
+                                paymentMethod === 'wallet' && { backgroundColor: '#E0E7FF' } // Indigo tint for Coporate
+                            ]}
+                            onPress={() => {
+                                if (paymentMethod === 'cash') {
+                                    if (userProfile?.orgId) {
+                                        setPaymentMethod('wallet');
+                                    } else {
+                                        Alert.alert("Corporate Wallet", "Ask your employer to add you to their BebaX Business account to use this feature.");
+                                    }
+                                } else {
+                                    setPaymentMethod('cash');
+                                }
+                            }}
+                        >
+                            <Ionicons
+                                name={paymentMethod === 'cash' ? "cash" : "briefcase"}
+                                size={20}
+                                color={paymentMethod === 'wallet' ? Colors.primary : DEEP_ASPHALT}
+                            />
+                            <Text style={[
+                                styles.paymentValue,
+                                paymentMethod === 'wallet' && { color: Colors.primary }
+                            ]}>
+                                {paymentMethod === 'cash' ? 'Cash' : 'Corporate'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.bookingButton}
+                            onPress={handleBookRide}
+                            disabled={isBooking}
+                        >
+                            {isBooking ? <ActivityIndicator color="white" /> : (
+                                <Text style={styles.btnText}>Confirm {vehicles.find(v => v.id === vehicleType)?.label}</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
                 </View>
             )}
         </View>
@@ -510,177 +495,141 @@ const styles = StyleSheet.create({
     },
 
     // Bottom Sheet
-    bottomContainer: {
+    floatingBottomContainer: {
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
-        backgroundColor: 'white',
-        borderTopLeftRadius: 32,
-        borderTopRightRadius: 32,
+        backgroundColor: 'rgba(255, 255, 255, 0.95)', // Slightly transparent
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        paddingHorizontal: 20,
+        paddingTop: 8,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -5 },
         shadowOpacity: 0.1,
-        shadowRadius: 20,
-        elevation: 20,
-        paddingTop: 16, // More top padding
-        maxHeight: '65%', // Allow slightly more height
+        shadowRadius: 10,
+        elevation: 10,
     },
     bottomSheetHandle: {
-        width: 48, // Wider handle
-        height: 5,
-        backgroundColor: '#E0E0E0',
-        borderRadius: 3,
+        width: 40,
+        height: 4,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 2,
         alignSelf: 'center',
-        marginBottom: 20, // More breathing room below handle
+        marginBottom: 10,
     },
     itemsInputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F8F9FA',
-        marginHorizontal: 24,
-        paddingHorizontal: 20, // More internal padding
-        paddingVertical: 16,
-        borderRadius: 20, // Softer corners
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#f0f0f0',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 4,
+        marginBottom: 16,
     },
     itemsIconBox: {
-        marginRight: 14,
+        width: 40,
+        height: 40,
+        backgroundColor: 'white',
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     itemsInput: {
         flex: 1,
-        fontSize: 16, // Larger text
-        fontWeight: '500',
+        fontSize: 14,
         color: Colors.text,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontWeight: '500',
     },
     sectionTitle: {
-        fontSize: 19,
-        fontWeight: '800',
-        marginLeft: 24,
-        marginBottom: 20, // More space below title
-        marginTop: 20, // More space above title
-        color: Colors.text,
+        fontSize: 14,
+        fontWeight: '700',
+        color: Colors.textDim,
+        marginBottom: 12,
+        marginLeft: 4,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
     },
     vehicleList: {
-        paddingHorizontal: 24,
-        paddingBottom: 20, // More space below list
+        paddingBottom: 4,
+        marginBottom: 8, // Compressed
     },
-    // Vehicle Card
     vehicleCard: {
-        width: 146,
-        height: 180,
-        backgroundColor: 'white',
-        borderRadius: 22,
-        padding: 14,
-        marginRight: 16,
-        borderWidth: 1,
-        borderColor: '#F0F0F0',
+        width: 130, // Smaller width
+        height: 140, // Reduced height
+        padding: 10,
+        backgroundColor: '#F9FAFB',
+        borderRadius: 16,
+        marginRight: 10,
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.05,
-        shadowRadius: 10,
-        elevation: 3,
+        borderWidth: 1.5,
+        borderColor: 'transparent',
     },
     vehicleCardSelected: {
+        backgroundColor: '#FFF7ED',
         borderColor: Colors.primary,
-        backgroundColor: '#fffdfb',
-        borderWidth: 2,
         shadowColor: Colors.primary,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-        elevation: 8,
-    },
-    vehicleImage: { width: 110, height: 65, marginBottom: 14 },
-    vehicleLabel: { fontSize: 16, fontWeight: '700', marginBottom: 4 },
-    vehicleLabelSelected: { color: Colors.primary },
-    vehiclePrice: { fontSize: 14, color: Colors.textDim, marginBottom: 4, fontWeight: '600' },
-    vehicleEta: { fontSize: 13, fontWeight: '700', color: Colors.primary },
-    checkIcon: { position: 'absolute', top: 12, right: 12 },
-
-    // Premium Options
-    premiumOptions: {
-        paddingHorizontal: 24,
-        paddingTop: 28, // spacious
-    },
-    insuranceCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'white',
-        padding: 20,
-        borderRadius: 24,
-        borderWidth: 1,
-        borderColor: '#F0F0F0',
-        marginBottom: 24,
-        shadowColor: "#000",
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.03,
-        shadowRadius: 8,
-        elevation: 2,
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+        elevation: 4,
     },
-    insuranceActive: {
-        borderColor: Colors.primary,
-        backgroundColor: '#F0F9FF', // Subtle hint
+    vehicleImage: { width: 80, height: 60, marginBottom: 8 },
+    vehicleInfo: { alignItems: 'center' },
+    vehicleLabel: { fontSize: 13, fontWeight: '700', color: Colors.text, marginBottom: 2 },
+    vehicleLabelSelected: { color: Colors.primary },
+    vehiclePrice: { fontSize: 12, fontWeight: '700', color: Colors.text },
+    vehicleEta: { fontSize: 10, color: Colors.textDim, marginTop: 2 },
+    checkIcon: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
     },
-    shieldIconData: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: '#E0E0E0',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 14,
-    },
-    insuranceTextContainer: { flex: 1 },
-    insuranceTitle: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-    insuranceSubtitle: { fontSize: 12, color: Colors.textDim, lineHeight: 16 },
-    addBtn: { backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: '#ddd' },
-    addBtnText: { fontSize: 12, fontWeight: '700', color: Colors.textDim },
 
-    paymentRow: {
+    // --- COMPACT ACTIONS ---
+    simpleActionRow: {
         flexDirection: 'row',
-        marginBottom: 20,
+        gap: 12,
+        marginBottom: 10,
+        marginTop: 10,
     },
-    paymentOption: {
-        flex: 1,
+    paymentSelector: {
         flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        borderRadius: 16,
+        gap: 8,
+    },
+    paymentValue: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: DEEP_ASPHALT,
+    },
+    bookingButton: {
+        flex: 1,
+        backgroundColor: Colors.primary,
+        borderRadius: 16,
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: 14,
-        backgroundColor: '#F8F9FA',
-        borderRadius: 14,
-        marginHorizontal: 4,
-        borderWidth: 1,
-        borderColor: '#EFEFEF',
-    },
-    paymentOptionActive: {
-        borderColor: Colors.primary,
-        backgroundColor: 'white',
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-    },
-    paymentText: { marginLeft: 8, fontWeight: '600', color: Colors.textDim },
-    paymentTextActive: { color: Colors.primary },
-
-    bookingButton: {
-        backgroundColor: Colors.primary,
-        paddingVertical: 16,
-        borderRadius: 20,
-        alignItems: 'center',
         shadowColor: Colors.primary,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-        elevation: 8,
-        marginBottom: 10,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
     },
-    btnContent: { alignItems: 'center' },
-    btnText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-    btnSubText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 2, fontWeight: '500' },
+    btnText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: '700',
+    },
 });

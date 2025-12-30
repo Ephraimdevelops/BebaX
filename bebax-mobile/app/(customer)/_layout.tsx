@@ -66,19 +66,15 @@ export default function CustomerLayout() {
                     ),
                 }}
             />
-            <Tabs.Screen
-                name="support"
-                options={{
-                    href: null, // Hide from tab bar if not needed, or show if asked
-                    title: "Support",
-                }}
-            />
-            <Tabs.Screen
-                name="profile"
-                options={{
-                    href: null, // Profile is accessed via header, hide from bottom tabs
-                }}
-            />
+            {/* Hidden screens - accessed via navigation, not tabs */}
+            <Tabs.Screen name="support" options={{ href: null }} />
+            <Tabs.Screen name="profile" options={{ href: null }} />
+            <Tabs.Screen name="settings" options={{ href: null }} />
+            <Tabs.Screen name="list-business" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+            <Tabs.Screen name="my-business" options={{ href: null }} />
+            <Tabs.Screen name="ride-status" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+            <Tabs.Screen name="notifications" options={{ href: null }} />
+            <Tabs.Screen name="receipt" options={{ href: null }} />
         </Tabs>
     );
 }

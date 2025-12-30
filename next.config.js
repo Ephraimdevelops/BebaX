@@ -11,15 +11,18 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  webpack(config, { dev }) {
-    if (dev) {
-      // Reduce CPU/memory from file watching
-      config.watchOptions = {
-        poll: 2000, // check every 2 seconds
-        aggregateTimeout: 300, // wait before rebuilding
-        ignored: ['**/node_modules'],
-      };
-    }
+  webpack(config) {
+    // Exclude mobile directories from webpack builds
+    config.watchOptions = {
+      ...config.watchOptions,
+      poll: 2000,
+      aggregateTimeout: 300,
+      ignored: [
+        '**/node_modules/**',
+        '**/native/**',
+        '**/bebax-mobile/**',
+      ],
+    };
     return config;
   },
   onDemandEntries: {

@@ -11,10 +11,13 @@
 import type * as actions from "../actions.js";
 import type * as actions_ride from "../actions/ride.js";
 import type * as admin from "../admin.js";
+import type * as b2b from "../b2b.js";
+import type * as businessListings from "../businessListings.js";
 import type * as debug from "../debug.js";
 import type * as drivers from "../drivers.js";
 import type * as fileUpload from "../fileUpload.js";
 import type * as fleets from "../fleets.js";
+import type * as insurance from "../insurance.js";
 import type * as lib_geohash from "../lib/geohash.js";
 import type * as messages from "../messages.js";
 import type * as negotiation from "../negotiation.js";
@@ -42,10 +45,13 @@ declare const fullApi: ApiFromModules<{
   actions: typeof actions;
   "actions/ride": typeof actions_ride;
   admin: typeof admin;
+  b2b: typeof b2b;
+  businessListings: typeof businessListings;
   debug: typeof debug;
   drivers: typeof drivers;
   fileUpload: typeof fileUpload;
   fleets: typeof fleets;
+  insurance: typeof insurance;
   "lib/geohash": typeof lib_geohash;
   messages: typeof messages;
   negotiation: typeof negotiation;

@@ -15,6 +15,12 @@ export const setupTestData = mutation({
             creditLimit: 50000,
             billingModel: "prepaid",
             adminEmail: "admin@testcorp.com",
+            // New B2B tier fields
+            tier: "starter",
+            commissionRate: 0.15,
+            apiEnabled: false,
+            monthlyVolume: 0,
+            verified: false,
             created_at: new Date().toISOString(),
         });
 

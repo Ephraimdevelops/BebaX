@@ -78,9 +78,8 @@ export default function SideMenu({ visible, onClose }: SideMenuProps) {
         router.push('/(auth)/welcome');
     };
 
-    if (!visible && fadeAnim._value === 0) return null; // Optimization? Or allow render for animation out? 
-    // Actually, we should render if visible OR animating. 
-    // For simplicity, we just render and use pointerEvents.
+    // We use pointerEvents='none' when not visible to prevent interaction while allowing exit animation.
+    // No early return to ensure exit animation runs smoothly.
 
     return (
         <View style={[styles.overlay, !visible && { pointerEvents: 'none' }]}>
@@ -151,7 +150,7 @@ export default function SideMenu({ visible, onClose }: SideMenuProps) {
                     <MenuItem
                         icon="settings"
                         label="Settings"
-                        onPress={() => Alert.alert("Settings", "App Settings coming soon.")}
+                        onPress={() => handleNavigation('/(customer)/settings')}
                     />
                 </View>
 
@@ -159,7 +158,7 @@ export default function SideMenu({ visible, onClose }: SideMenuProps) {
                 <View style={styles.footer}>
                     {isSignedIn && (
                         <TouchableOpacity style={styles.logoutButton} onPress={() => handleNavigation('logout')}>
-                            <MaterialIcons name="logout" size={20} color={Colors.error || '#FF4444'} />
+                            <MaterialIcons name="logout" size={20} color={Colors.danger || '#FF4444'} />
                             <Text style={styles.logoutText}>Sign Out</Text>
                         </TouchableOpacity>
                     )}
@@ -324,7 +323,7 @@ const styles = StyleSheet.create({
         marginBottom: 20,
     },
     logoutText: {
-        color: Colors.error || '#FF4444',
+        color: Colors.danger || '#FF4444',
         fontWeight: 'bold',
         marginLeft: 12,
     },

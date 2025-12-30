@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 import { reserveFunds, settleTrip, refundReservation } from "./utils/financial";
+import { checkSpendingLimit } from "./b2b";
 
 // Validation helper
 const validateLatLng = (location: { lat: number; lng: number }) => {
@@ -29,22 +30,62 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     return R * c;
 }
 
+/**
+ * Calculate fare based on distance and vehicle type
+ * Uses the 7 Tanzanian vehicle fleet pricing structure
+ * With safe fallback to 'canter' pricing for unrecognized types
+ */
 function calculateFare(distance: number, vehicleType: string) {
+    // Base fares in TSH (Tanzanian Shillings)
     const baseFares: Record<string, number> = {
-        tricycle: 2000,
+        // New Tanzanian Fleet (Source of Truth)
+        boda: 2000,      // Motorcycle
+        toyo: 3000,      // Cargo Tricycle/Guta
+        kirikuu: 5000,   // Mini Truck (Suzuki Carry)
+        pickup: 8000,    // Standard Pickup
+        canter: 15000,   // Box Body 3-4T
+        fuso: 30000,     // Heavy Truck 10T
+        trailer: 50000,  // Semi-Trailer 20T+
+        // Legacy mappings for backward compatibility
+        tricycle: 3000,
         van: 5000,
-        truck: 8000,
-        semitrailer: 15000
-    };
-    const perKmRates: Record<string, number> = {
-        tricycle: 300,
-        van: 500,
-        truck: 800,
-        semitrailer: 1200
+        truck: 15000,
+        semitrailer: 50000,
+        bajaji: 3000,
+        bajaj: 3000,
+        classic: 8000,
+        boxbody: 15000,
     };
 
-    const base = baseFares[vehicleType] || 2000;
-    const rate = perKmRates[vehicleType] || 300;
+    // Per-km rates in TSH
+    const perKmRates: Record<string, number> = {
+        // New Tanzanian Fleet
+        boda: 200,
+        toyo: 300,
+        kirikuu: 400,
+        pickup: 600,
+        canter: 800,
+        fuso: 1200,
+        trailer: 1500,
+        // Legacy mappings
+        tricycle: 300,
+        van: 400,
+        truck: 800,
+        semitrailer: 1500,
+        bajaji: 300,
+        bajaj: 300,
+        classic: 600,
+        boxbody: 800,
+    };
+
+    // Safe fallback to 'canter' pricing if vehicle type is unrecognized
+    const base = baseFares[vehicleType] ?? baseFares['canter'];
+    const rate = perKmRates[vehicleType] ?? perKmRates['canter'];
+
+    // Log warning for unrecognized types
+    if (!(vehicleType in baseFares)) {
+        console.warn(`[PRICING] Unknown vehicle type: "${vehicleType}", using 'canter' fallback pricing`);
+    }
 
     return base + (distance * rate);
 }
@@ -63,6 +104,22 @@ export const create = mutation({
             address: v.string(),
         }),
         vehicle_type: v.union(
+            // New Tanzanian Fleet (Source of Truth - 7 types)
+            v.literal("boda"),      // Motorcycle
+            v.literal("toyo"),      // Cargo Tricycle/Guta
+            v.literal("kirikuu"),   // Mini Truck
+            v.literal("pickup"),    // Standard Pickup
+            v.literal("canter"),    // Box Body 3-4T
+            v.literal("fuso"),      // Heavy Truck 10T
+            v.literal("trailer"),   // Semi-Trailer 20T+
+            // Legacy vehicle IDs for backward compatibility
+            v.literal("bajaj"),
+            v.literal("bajaji"),
+            v.literal("pickup_s"),
+            v.literal("pickup_d"),
+            v.literal("semi"),
+            v.literal("classic"),
+            v.literal("boxbody"),
             v.literal("tricycle"),
             v.literal("van"),
             v.literal("truck"),
@@ -107,6 +164,20 @@ export const create = mutation({
             throw new Error("Maximum 5 cargo photos allowed");
         }
 
+        // Validate coordinates are reasonable (Tanzania bounds roughly: -11 to -1 lat, 29 to 41 lng)
+        const validateCoords = (lat: number, lng: number, label: string) => {
+            if (lat === 0 && lng === 0) {
+                throw new Error(`${label} location coordinates are invalid (0,0). Please select a valid location.`);
+            }
+            // Basic sanity check for Tanzania/East Africa region
+            if (lat < -20 || lat > 5 || lng < 20 || lng > 50) {
+                console.warn(`${label} coordinates outside East Africa: ${lat}, ${lng}`);
+            }
+        };
+
+        validateCoords(args.pickup_location.lat, args.pickup_location.lng, "Pickup");
+        validateCoords(args.dropoff_location.lat, args.dropoff_location.lng, "Dropoff");
+
         const distance = calculateDistance(
             args.pickup_location.lat,
             args.pickup_location.lng,
@@ -114,9 +185,27 @@ export const create = mutation({
             args.dropoff_location.lng
         );
 
-        // Validate distance (max 500km for single trip)
-        if (distance > 500) {
-            throw new Error("Trip distance exceeds maximum allowed (500km)");
+        // Distance Validation Constants
+        const MIN_DISTANCE_KM = 0.2; // 200 meters minimum
+        const MAX_DISTANCE_KM = 1000; // 1000km maximum (Tanzania is ~945km north-south)
+
+        // Validate minimum distance
+        if (distance < MIN_DISTANCE_KM) {
+            const distanceMeters = Math.round(distance * 1000);
+            throw new Error(
+                `DISTANCE_TOO_SHORT:${distanceMeters}|` +
+                `Pickup and dropoff are too close (${distanceMeters}m). ` +
+                `Minimum distance is ${MIN_DISTANCE_KM * 1000}m (200 meters).`
+            );
+        }
+
+        // Validate maximum distance
+        if (distance > MAX_DISTANCE_KM) {
+            throw new Error(
+                `DISTANCE_TOO_FAR:${distance.toFixed(1)}|` +
+                `Trip distance (${distance.toFixed(1)}km) exceeds maximum allowed (${MAX_DISTANCE_KM}km). ` +
+                `Please check your pickup and dropoff locations.`
+            );
         }
 
         let fare = calculateFare(distance, args.vehicle_type);
@@ -153,7 +242,7 @@ export const create = mutation({
                 .first();
 
             if (!userProfile || !userProfile.orgId) {
-                throw new Error("Wallet payment requires an Organization account");
+                throw new Error("Corporate Wallet not available: You are not part of an organization.");
             }
 
             orgId = userProfile.orgId;
@@ -162,14 +251,13 @@ export const create = mutation({
             const org = await ctx.db.get(orgId);
             if (!org) throw new Error("Organization not found");
 
-            // 1. Check Daily Spending Limit
-            if (userProfile.spendingLimitPerDay) {
-                if (finalFare > userProfile.spendingLimitPerDay) {
-                    throw new Error(`Ride exceeds your daily spending limit of ${userProfile.spendingLimitPerDay}`);
-                }
+            // 1. Check Spending Limits
+            const limitCheck = await checkSpendingLimit(ctx, userProfile._id, finalFare);
+            if (!limitCheck.allowed) {
+                throw new Error(`Transaction Declined: ${limitCheck.reason}`);
             }
 
-            // 3. Atomic Reservation
+            // 2. Atomic Reservation
             await reserveFunds(ctx, orgId, finalFare);
         }
 
@@ -239,7 +327,7 @@ async function getNearbyDriversInternal(ctx: any, lat: number, lng: number, radi
     });
 }
 
-// Get nearby drivers (public query)
+// Get nearby drivers (public query - SANITIZED for Map)
 export const getNearbyDrivers = query({
     args: {
         lat: v.number(),
@@ -253,7 +341,16 @@ export const getNearbyDrivers = query({
             throw new Error("Radius must be between 1 and 50 km");
         }
 
-        return await getNearbyDriversInternal(ctx, args.lat, args.lng, args.radiusKm);
+        const drivers = await getNearbyDriversInternal(ctx, args.lat, args.lng, args.radiusKm);
+
+        // SANITIZE: Only return data needed for map visualization
+        return drivers.map((d: any) => ({
+            _id: d._id,
+            location: d.current_location,
+            vehicle_type: d.vehicle_type,
+            // Add mock heading if missing for animation
+            heading: d.current_location?.heading || 0
+        }));
     },
 });
 
@@ -550,13 +647,22 @@ export const listAvailableRides = query({
             return [];
         }
 
+        // First check if they have a verified driver record
         const driver = await ctx.db
             .query("drivers")
             .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
             .first();
 
+        // If no driver record, check if their profile role is "driver" (allows new drivers)
         if (!driver) {
-            throw new Error("Only drivers can view available rides");
+            const profile = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+                .first();
+
+            if (!profile || profile.role !== "driver") {
+                throw new Error("Only drivers can view available rides");
+            }
         }
 
         return await ctx.db
@@ -586,6 +692,23 @@ export const getRide = query({
         }
 
         return ride;
+    },
+});
+
+// Get list of rides for driver history (Manifest)
+export const listDriverHistory = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        return await ctx.db
+            .query("rides")
+            .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
+            .order("desc")
+            .take(50); // Limit to last 50 rides
     },
 });
 
@@ -626,96 +749,21 @@ export const getActiveRide = query({
                 .first();
             if (driver) {
                 driverLocation = driver.current_location;
-            }
-
-            const userProfile = await ctx.db
-                .query("userProfiles")
-                .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id!))
-                .first();
-            if (userProfile) {
-                driverPhone = userProfile.phone;
+                // Get phone from user profile
+                const driverProfile = await ctx.db
+                    .query("userProfiles")
+                    .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.driver_clerk_id!))
+                    .first();
+                if (driverProfile) {
+                    driverPhone = driverProfile.phone;
+                }
             }
         }
 
         return {
             ...ride,
             driver_location: driverLocation,
-            driver_phone: driverPhone,
+            driver_phone: driverPhone
         };
-    },
-});
-// Get active ride for driver
-export const getDriverActiveRide = query({
-    args: {},
-    handler: async (ctx) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) {
-            return null;
-        }
-
-        const ride = await ctx.db
-            .query("rides")
-            .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
-            .filter((q) =>
-                q.or(
-                    q.eq(q.field("status"), "accepted"),
-                    q.eq(q.field("status"), "loading"),
-                    q.eq(q.field("status"), "ongoing")
-                )
-            )
-            .order("desc")
-            .first();
-
-        if (!ride) {
-            return null;
-        }
-
-        const customer = await ctx.db
-            .query("userProfiles")
-            .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.customer_clerk_id))
-            .first();
-
-        return {
-            ...ride,
-            customer_phone: customer?.phone,
-        };
-    },
-});
-
-import { getNeighbors } from "./lib/geohash";
-
-// Get open rides for a driver based on geohash
-export const getOpenRides = query({
-    args: {
-        geohash: v.string(),
-    },
-    handler: async (ctx, args) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) {
-            return [];
-        }
-
-        const rides = await ctx.db
-            .query("rides")
-            .withIndex("by_status", (q) => q.eq("status", "pending"))
-            .order("desc")
-            .take(50);
-
-        // Geohash Proximity Logic (Center + 8 Neighbors)
-        // We use precision 5 (~4.9km x 4.9km) for the "search grid"
-        // This ensures we catch rides even if the driver is at the edge of a cell.
-        const searchPrecision = 5;
-        const driverGeohashPrefix = args.geohash.substring(0, searchPrecision);
-
-        const neighbors = getNeighbors(driverGeohashPrefix);
-        const searchHashes = [driverGeohashPrefix, ...neighbors];
-
-        return rides.filter(ride => {
-            // Fallback: If ride has no geohash, show it (or maybe hide it? Showing for now to be safe)
-            if (!ride.pickup_location.geohash) return true;
-
-            // Check if ride's geohash starts with any of the 9 search hashes
-            return searchHashes.some(hash => ride.pickup_location.geohash!.startsWith(hash));
-        });
     },
 });

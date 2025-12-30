@@ -1,56 +1,112 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, Image } from 'react-native';
-import { useSignUp, useSignIn } from "@clerk/clerk-expo";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { VEHICLE_FLEET } from '../../src/constants/vehicleRegistry';
+import { useSignUp } from "@clerk/clerk-expo";
 import { useRouter } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, User, Mail, Phone, MapPin, Lock, Truck, FileText, CheckCircle } from 'lucide-react-native';
+import { DriverIllustration } from '../../components/AuthIllustrations';
+import { PremiumInput } from '../../components/PremiumInput';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useMutation } from "convex/react";
+import { api } from "../../src/convex/_generated/api";
 
 export default function DriverSignup() {
-    const { isLoaded, signUp, setSession: setSignUpActive } = useSignUp();
+    const { isLoaded, signUp, setActive: setSignUpActive } = useSignUp();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
+    const syncDriverProfile = useMutation(api.users.createOrUpdateProfile);
+    const registerDriver = useMutation(api.drivers.register);
 
-    // Driver-specific registration state
     const [driverData, setDriverData] = useState({
         name: '',
         email: '',
         phone: '',
+        city: '',
         password: '',
-        vehicleType: 'boda', // specific to drivers
+        vehicleType: '',
         licenseNumber: '',
     });
 
     const [loading, setLoading] = useState(false);
     const [pendingVerification, setPendingVerification] = useState(false);
     const [code, setCode] = useState('');
+    const [error, setError] = useState('');
+
+    const updateField = (key: string, value: string) => {
+        setDriverData(prev => ({ ...prev, [key]: value }));
+        setError('');
+    };
 
     const handleRegister = async () => {
         if (!isLoaded) return;
-        if (!driverData.name || !driverData.email || !driverData.password || !driverData.vehicleType || !driverData.licenseNumber) {
-            Alert.alert('Error', 'Please fill in all fields');
+        const { name, email, phone, city, password, vehicleType, licenseNumber } = driverData;
+
+        if (!name || !email || !password || !vehicleType || !licenseNumber || !city) {
+            setError('Please complete all fields to proceed.');
             return;
         }
 
+        setError('');
         setLoading(true);
         try {
-            await signUp.create({
-                emailAddress: driverData.email,
-                password: driverData.password,
-                firstName: driverData.name,
+            const completeSignUp = await signUp.create({
+                emailAddress: email,
+                password,
+                firstName: name,
                 unsafeMetadata: {
                     role: 'driver',
-                    phone: driverData.phone,
-                    vehicleType: driverData.vehicleType,
-                    licenseNumber: driverData.licenseNumber
+                    phone: phone,
+                    city: city,
+                    vehicleType: vehicleType,
+                    licenseNumber: licenseNumber
                 }
             });
 
+            if (completeSignUp.status === 'complete') {
+                await setSignUpActive({ session: completeSignUp.createdSessionId });
+
+                // 1. Sync user profile with driver role
+                try {
+                    await syncDriverProfile({
+                        name: name,
+                        email: email,
+                        phone: phone,
+                        role: 'driver',
+                    });
+                } catch (e) {
+                    console.error("Profile sync failed:", e);
+                }
+
+                // 2. Create driver record in drivers table (required for cockpit)
+                try {
+                    await registerDriver({
+                        license_number: licenseNumber,
+                        nida_number: "pending", // Will be updated later in profile
+                        vehicle_type: vehicleType,
+                        vehicle_plate: "pending", // Will be updated later
+                        capacity_kg: 500, // Default, can be updated later
+                        payout_method: "mpesa" as const,
+                        payout_number: phone,
+                        location: { lat: -6.7924, lng: 39.2083 }, // DSM default
+                    });
+                } catch (e: any) {
+                    // May fail if driver already exists, that's ok
+                    console.log("Driver registration:", e.message);
+                }
+
+                // Wait for Convex to propagate
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                router.replace('/(driver)/cockpit');
+                return;
+            }
+
             await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
             setPendingVerification(true);
-            Alert.alert("Verification Sent", "Please check your email.");
-
         } catch (err: any) {
-            console.error(JSON.stringify(err, null, 2));
-            Alert.alert('Error', err.errors ? err.errors[0].message : 'Registration failed');
+            setError(err.errors ? err.errors[0].message : 'Application failed');
         } finally {
             setLoading(false);
         }
@@ -63,251 +119,296 @@ export default function DriverSignup() {
             const completeSignUp = await signUp.attemptEmailAddressVerification({ code });
             if (completeSignUp.status === 'complete') {
                 await setSignUpActive({ session: completeSignUp.createdSessionId });
-                // Root layout redirects to cockpit
+
+                // 1. Sync user profile with driver role
+                try {
+                    await syncDriverProfile({
+                        name: driverData.name,
+                        email: driverData.email,
+                        phone: driverData.phone,
+                        role: 'driver',
+                    });
+                } catch (e) {
+                    console.error("Profile sync failed:", e);
+                }
+
+                // 2. Create driver record in drivers table (required for cockpit)
+                try {
+                    await registerDriver({
+                        license_number: driverData.licenseNumber,
+                        nida_number: "pending",
+                        vehicle_type: driverData.vehicleType,
+                        vehicle_plate: "pending",
+                        capacity_kg: 500,
+                        payout_method: "mpesa" as const,
+                        payout_number: driverData.phone,
+                        location: { lat: -6.7924, lng: 39.2083 },
+                    });
+                } catch (e: any) {
+                    console.log("Driver registration:", e.message);
+                }
+
+                // Wait for Convex to propagate
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                router.replace('/(driver)/cockpit');
             } else {
-                Alert.alert("Error", "Verification incomplete");
+                setError("Verification incomplete");
             }
         } catch (err: any) {
-            Alert.alert("Error", err.errors ? err.errors[0].message : "Verification failed");
+            setError(err.errors ? err.errors[0].message : "Verification failed");
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-            <ScrollView contentContainerStyle={styles.scrollContainer}>
-
+        <View style={[styles.container, { paddingTop: insets.top }]}>
+            <View style={styles.header}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                     <ArrowLeft color={Colors.text} size={24} />
                 </TouchableOpacity>
+            </View>
 
-                {/* 3D Logo Header */}
-                <View style={styles.logoContainer}>
-                    <Image
-                        source={{ uri: 'file:///Users/ednangowi/.gemini/antigravity/brain/ce78f4e0-d7a0-4e84-a1e8-69c77a41ac49/bebax_3d_logo_header_1765824096128.png' }}
-                        style={styles.logoImage}
-                    />
-                </View>
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                style={{ flex: 1 }}
+            >
+                <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
 
-                <View style={styles.header}>
-                    <Text style={styles.title}>Driver Application</Text>
-                    <Text style={styles.subtitle}>Join the fleet and start earning today.</Text>
-                </View>
-
-                {pendingVerification ? (
-                    <View style={styles.formContent}>
-                        <Text style={styles.helperText}>Enter the verification code sent to your email.</Text>
-                        <View style={styles.inputGroup}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="123456"
-                                placeholderTextColor="#999"
-                                value={code}
-                                onChangeText={setCode}
-                                keyboardType="number-pad"
-                            />
-                        </View>
-                        <TouchableOpacity
-                            style={[styles.button, styles.primaryButton]}
-                            onPress={handleVerify}
-                            disabled={loading}
-                        >
-                            <Text style={styles.buttonText}>{loading ? 'Verifying...' : 'Verify Email'}</Text>
-                        </TouchableOpacity>
+                    {/* Header */}
+                    <View style={styles.brandingContainer}>
+                        <DriverIllustration width={180} height={180} />
+                        <Text style={styles.title}>Driver Partner</Text>
+                        <Text style={styles.subtitle}>Join the fleet. Earn on your terms.</Text>
                     </View>
-                ) : (
-                    <View style={styles.formContent}>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>Full Name</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="John Doe"
-                                placeholderTextColor="#999"
-                                value={driverData.name}
-                                onChangeText={(t) => setDriverData({ ...driverData, name: t })}
+
+                    {pendingVerification ? (
+                        <View style={styles.formSection}>
+                            <View style={styles.successBanner}>
+                                <CheckCircle size={24} color="#4CAF50" />
+                                <Text style={styles.successText}>Application Received!</Text>
+                            </View>
+                            <Text style={styles.helperText}>
+                                Please enter the verification code sent to {driverData.email} to complete your registration.
+                            </Text>
+
+                            <PremiumInput
+                                label="Verification Code"
+                                value={code}
+                                onChangeText={(t) => { setCode(t); setError(''); }}
+                                icon={Lock}
+                                keyboardType="number-pad"
+                                placeholder="123456"
+                                error={error}
                             />
+
+                            <TouchableOpacity
+                                style={styles.primaryButton}
+                                onPress={handleVerify}
+                                disabled={loading}
+                            >
+                                {loading ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text style={styles.primaryButtonText}>Verify & Start Driving</Text>
+                                )}
+                            </TouchableOpacity>
                         </View>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>Email Address</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="name@example.com"
-                                placeholderTextColor="#999"
+                    ) : (
+                        <View style={styles.formSection}>
+                            <Text style={styles.sectionTitle}>Personal Details</Text>
+
+                            <PremiumInput
+                                label="Full Name"
+                                value={driverData.name}
+                                onChangeText={(t) => updateField('name', t)}
+                                icon={User}
+                            />
+
+                            <PremiumInput
+                                label="Email"
                                 value={driverData.email}
-                                onChangeText={(t) => setDriverData({ ...driverData, email: t })}
+                                onChangeText={(t) => updateField('email', t)}
+                                icon={Mail}
                                 keyboardType="email-address"
                                 autoCapitalize="none"
                             />
-                        </View>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>Phone Number</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="+255 700 000 000"
-                                placeholderTextColor="#999"
+
+                            <PremiumInput
+                                label="Phone Number"
                                 value={driverData.phone}
-                                onChangeText={(t) => setDriverData({ ...driverData, phone: t })}
+                                onChangeText={(t) => updateField('phone', t)}
+                                icon={Phone}
                                 keyboardType="phone-pad"
                             />
-                        </View>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>Password</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Create a strong password"
-                                placeholderTextColor="#999"
-                                value={driverData.password}
-                                onChangeText={(t) => setDriverData({ ...driverData, password: t })}
-                                secureTextEntry
+
+                            <PremiumInput
+                                label="City / Region"
+                                value={driverData.city}
+                                onChangeText={(t) => updateField('city', t)}
+                                icon={MapPin}
                             />
-                        </View>
 
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>Vehicle Information</Text>
-                        </View>
+                            <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Vehicle & Security</Text>
 
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>Vehicle Type</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Boda / Bajaji / Truck"
-                                placeholderTextColor="#999"
-                                value={driverData.vehicleType}
-                                onChangeText={(t) => setDriverData({ ...driverData, vehicleType: t })}
-                            />
-                        </View>
+                            <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Vehicle & Security</Text>
 
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.label}>License Number</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Enter your license ID"
-                                placeholderTextColor="#999"
+                            <Text style={styles.fieldLabel}>Select Vehicle Type</Text>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.vehicleList}
+                            >
+                                {VEHICLE_FLEET.map((vehicle) => (
+                                    <TouchableOpacity
+                                        key={vehicle.id}
+                                        style={[
+                                            styles.vehicleChip,
+                                            driverData.vehicleType === vehicle.id && styles.vehicleChipSelected
+                                        ]}
+                                        onPress={() => updateField('vehicleType', vehicle.id)}
+                                    >
+                                        <MaterialIcons
+                                            name={vehicle.icon as any}
+                                            size={24}
+                                            color={driverData.vehicleType === vehicle.id ? Colors.primary : Colors.textDim}
+                                        />
+                                        <Text style={[
+                                            styles.vehicleChipText,
+                                            driverData.vehicleType === vehicle.id && styles.vehicleChipTextSelected
+                                        ]}>
+                                            {vehicle.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                            {driverData.vehicleType && (
+                                <Text style={styles.tierHint}>
+                                    {driverData.vehicleType === 'trailer' || driverData.vehicleType === 'fuso'
+                                        ? "Requirements: Commercial License, Insurance, Inspection (Manual Verification)"
+                                        : "Requirements: Valid License & Registration (Auto Verification)"}
+                                </Text>
+                            )}
+
+                            <PremiumInput
+                                label="License Number"
                                 value={driverData.licenseNumber}
-                                onChangeText={(t) => setDriverData({ ...driverData, licenseNumber: t })}
+                                onChangeText={(t) => updateField('licenseNumber', t)}
+                                icon={FileText}
+                                autoCapitalize="characters"
                             />
-                        </View>
 
-                        <TouchableOpacity
-                            style={[styles.button, styles.primaryButton, loading && styles.disabledButton]}
-                            onPress={handleRegister}
-                            disabled={loading}
-                        >
-                            <Text style={styles.buttonText}>
-                                {loading ? 'Processing...' : 'Submit Application'}
+                            <PremiumInput
+                                label="Create Password"
+                                value={driverData.password}
+                                onChangeText={(t) => updateField('password', t)}
+                                icon={Lock}
+                                secureTextEntry
+                                error={error}
+                            />
+
+                            <TouchableOpacity
+                                style={[styles.primaryButton, loading && styles.disabledButton]}
+                                onPress={handleRegister}
+                                disabled={loading}
+                            >
+                                {loading ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text style={styles.primaryButtonText}>Submit Application</Text>
+                                )}
+                            </TouchableOpacity>
+
+                            <Text style={styles.disclaimer}>
+                                By continuing, you agree to our Driver Terms of Service and Privacy Policy.
                             </Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
 
-            </ScrollView>
-        </KeyboardAvoidingView>
+                            {/* Global Error Display */}
+                            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+                        </View>
+                    )}
+                </ScrollView>
+            </KeyboardAvoidingView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: Colors.background,
-    },
-    scrollContainer: {
-        flexGrow: 1,
-        padding: 24,
-        paddingBottom: 40,
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 20,
-        backgroundColor: '#f0f0f0',
-        marginBottom: 20,
-        marginTop: 40,
-    },
-    logoContainer: {
-        alignItems: 'center',
-        marginBottom: 20
-    },
-    logoImage: {
-        width: 100,
-        height: 100,
-        resizeMode: 'contain'
-    },
-    header: {
-        marginBottom: 30,
-        alignItems: 'center',
-    },
-    title: {
-        fontSize: 32,
-        fontWeight: '800',
-        color: Colors.text,
-        marginBottom: 8,
-        textAlign: 'center',
-    },
-    subtitle: {
-        fontSize: 16,
-        color: Colors.textDim,
-        lineHeight: 24,
-        textAlign: 'center',
-    },
-    formContent: {
-        gap: 20,
-    },
-    inputGroup: {
-        gap: 8,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: Colors.text,
-    },
-    input: {
-        backgroundColor: '#F7F8F9',
-        borderWidth: 1,
-        borderColor: '#E8E9EB',
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        fontSize: 16,
-        color: Colors.text,
-    },
-    sectionHeader: {
-        marginTop: 10,
-        marginBottom: 10,
-    },
-    sectionTitle: {
-        color: Colors.primary,
-        fontWeight: '800',
-        fontSize: 18,
-    },
-    button: {
+    container: { flex: 1, backgroundColor: Colors.background },
+    header: { paddingHorizontal: 20, paddingBottom: 10 },
+    backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 20, backgroundColor: '#f0f0f0' },
+    scrollContainer: { paddingHorizontal: 24, paddingBottom: 40 },
+    brandingContainer: { alignItems: 'center', marginBottom: 32 },
+    title: { fontSize: 28, fontWeight: '800', color: Colors.text, marginBottom: 8, letterSpacing: -0.5 },
+    subtitle: { fontSize: 16, color: Colors.textDim, textAlign: 'center' },
+    formSection: { gap: 8 },
+    sectionTitle: { fontSize: 13, fontWeight: '700', color: Colors.textDim, textTransform: 'uppercase', marginBottom: 12, marginLeft: 4, letterSpacing: 0.5 },
+
+    primaryButton: {
         backgroundColor: Colors.primary,
-        paddingVertical: 18,
+        height: 56,
         borderRadius: 16,
         alignItems: 'center',
+        justifyContent: 'center',
         shadowColor: Colors.primary,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 4,
-        marginTop: 10,
+        marginTop: 20,
     },
-    primaryButton: {},
     disabledButton: { opacity: 0.7 },
-    buttonText: {
-        color: 'white',
-        fontWeight: '800',
-        fontSize: 16,
+    primaryButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+
+    successBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E8F5E9',
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 16,
+        gap: 12
     },
-    helperText: {
+    successText: { color: '#2E7D32', fontWeight: '700', fontSize: 16 },
+    helperText: { color: Colors.textDim, marginBottom: 20, lineHeight: 22 },
+    disclaimer: { color: Colors.textDim, fontSize: 12, textAlign: 'center', marginTop: 16, opacity: 0.6 },
+    errorText: { color: Colors.error, fontSize: 14, textAlign: 'center', marginTop: 10, fontWeight: 'bold' },
+
+    // Vehicle Selector Styles
+    fieldLabel: { fontSize: 14, fontWeight: '600', color: Colors.text, marginBottom: 12, marginLeft: 4 },
+    vehicleList: { paddingRight: 20, gap: 12 },
+    vehicleChip: {
+        width: 100,
+        height: 100,
+        backgroundColor: Colors.surfaceOff,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1.5,
+        borderColor: '#E0E0E0',
+        padding: 8,
+    },
+    vehicleChipSelected: {
+        borderColor: Colors.primary,
+        backgroundColor: '#FFF0E6', // Light orange tint
+    },
+    vehicleChipText: {
+        marginTop: 8,
+        fontSize: 12,
+        fontWeight: '600',
         color: Colors.textDim,
         textAlign: 'center',
-        marginBottom: 10,
-        fontSize: 14,
+    },
+    vehicleChipTextSelected: {
+        color: Colors.primary,
+        fontWeight: '700',
+    },
+    tierHint: {
+        fontSize: 12,
+        color: Colors.primary,
+        marginTop: 8,
+        marginLeft: 4,
+        fontStyle: 'italic',
     }
 });

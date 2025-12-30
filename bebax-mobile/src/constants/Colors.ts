@@ -13,4 +13,6 @@ export const Colors = {
     // Specific UI Elements
     mapOverlay: 'rgba(255, 255, 255, 0.9)',
     driverOverlay: 'rgba(18, 18, 18, 0.95)', // Deep Asphalt with opacity
+    error: '#ef4444',
+    warning: '#f59e0b', // Amber 500
 };

@@ -12,6 +12,7 @@ export default defineSchema({
     phone: v.string(),
     name: v.string(),
     email: v.optional(v.string()),
+    emergencyContact: v.optional(v.string()), // Added for SOS
     profilePhoto: v.optional(v.string()),
     pushToken: v.optional(v.string()), // Expo push token
     defaultAddress: v.optional(v.object({
@@ -35,8 +36,106 @@ export default defineSchema({
     creditLimit: v.number(), // Overdraft limit
     billingModel: v.union(v.literal("prepaid"), v.literal("invoice")),
     adminEmail: v.string(),
+    // Contact Info
+    phone: v.optional(v.string()),
+    contactPerson: v.optional(v.string()),
+    // Location (for accurate pickups)
+    location: v.optional(v.object({
+      lat: v.number(),
+      lng: v.number(),
+      address: v.string(),
+    })),
+    // Business Profile
+    industry: v.optional(v.string()),
+    logisticsNeeds: v.optional(v.array(v.string())),
+    expectedMonthlyVolume: v.optional(v.number()),
+    specialRequirements: v.optional(v.string()),
+    // B2B Tier Fields (optional for backward compatibility)
+    tier: v.optional(v.union(v.literal("starter"), v.literal("business"), v.literal("enterprise"))),
+    commissionRate: v.optional(v.number()), // 0.08 - 0.15 (8% - 15%)
+    apiKey: v.optional(v.string()),
+    apiEnabled: v.optional(v.boolean()),
+    monthlyVolume: v.optional(v.number()), // Running total
+    billingCycleStart: v.optional(v.string()),
+    logo: v.optional(v.string()),
+    verified: v.optional(v.boolean()),
     created_at: v.string(),
-  }),
+  }).index("by_tier", ["tier"])
+    .index("by_verified", ["verified"]),
+
+  // Insurance Tiers
+  insurance_tiers: defineTable({
+    name: v.string(), // "Basic", "Standard", "Premium"
+    code: v.string(), // "basic", "standard", "premium"
+    fee: v.number(), // in TZS
+    maxCoverage: v.number(), // max claim amount in TZS
+    description: v.string(),
+    isActive: v.boolean(),
+    created_at: v.string(),
+  }).index("by_code", ["code"]),
+
+  // Insurance Claims
+  insurance_claims: defineTable({
+    rideId: v.id("rides"),
+    customerClerkId: v.string(),
+    tierId: v.id("insurance_tiers"),
+    declaredValue: v.number(), // Value declared at booking
+    claimAmount: v.number(), // Amount being claimed
+    claimReason: v.string(),
+    evidencePhotos: v.array(v.string()),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("under_review"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("paid")
+    ),
+    adminNotes: v.optional(v.string()),
+    approvedAmount: v.optional(v.number()),
+    payoutMethod: v.optional(v.union(v.literal("mpesa"), v.literal("airtel"), v.literal("tigo"))),
+    payoutNumber: v.optional(v.string()),
+    payoutTransactionId: v.optional(v.string()),
+    created_at: v.string(),
+    resolvedAt: v.optional(v.string()),
+  }).index("by_ride", ["rideId"])
+    .index("by_customer", ["customerClerkId"])
+    .index("by_status", ["status"]),
+
+  // Business Listings (Companies seeking drivers)
+  business_listings: defineTable({
+    organizationId: v.id("organizations"),
+    title: v.string(),
+    description: v.string(),
+    category: v.union(
+      v.literal("retail"),
+      v.literal("construction"),
+      v.literal("agriculture"),
+      v.literal("manufacturing"),
+      v.literal("e-commerce"),
+      v.literal("logistics"),
+      v.literal("other")
+    ),
+    routeType: v.union(v.literal("local"), v.literal("regional"), v.literal("national")),
+    frequency: v.union(v.literal("daily"), v.literal("weekly"), v.literal("monthly"), v.literal("on_demand")),
+    vehicleRequirements: v.array(v.string()), // ["truck", "van"]
+    estimatedMonthlyTrips: v.number(),
+    payRate: v.optional(v.string()), // e.g., "50,000 - 100,000 TZS per trip"
+    isActive: v.boolean(),
+    created_at: v.string(),
+  }).index("by_org", ["organizationId"])
+    .index("by_category", ["category"])
+    .index("by_active", ["isActive"]),
+
+  // Driver Applications to Business Listings
+  listing_applications: defineTable({
+    listingId: v.id("business_listings"),
+    driverClerkId: v.string(),
+    coverLetter: v.optional(v.string()),
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("rejected")),
+    created_at: v.string(),
+    respondedAt: v.optional(v.string()),
+  }).index("by_listing", ["listingId"])
+    .index("by_driver", ["driverClerkId"]),
 
   // Fleets
   fleets: defineTable({
@@ -60,6 +159,16 @@ export default defineSchema({
     })),
     verified: v.boolean(),
     is_online: v.boolean(),
+    // Enforce 6 Tanzanian Vehicle Types (plus legacy support - removed trailer)
+    vehicle_type: v.union(
+      v.literal("boda"), v.literal("toyo"), v.literal("kirikuu"),
+      v.literal("pickup"), v.literal("canter"), v.literal("fuso"),
+      // Legacy (Removed trailer types)
+      v.literal("bajaji"), v.literal("bajaj"), v.literal("tricycle"),
+      v.literal("van"), v.literal("truck"),
+      v.literal("pickup_s"), v.literal("pickup_d"),
+      v.literal("classic"), v.literal("boxbody")
+    ),
     current_location: v.optional(v.object({
       lat: v.number(),
       lng: v.number(),
@@ -102,6 +211,7 @@ export default defineSchema({
     customer_clerk_id: v.string(),
     driver_clerk_id: v.optional(v.string()),
     org_id: v.optional(v.id("organizations")), // Linked Organization
+    listing_id: v.optional(v.id("business_listings")), // Linked to job listing
     vehicle_type: v.string(),
     pickup_location: v.object({
       lat: v.number(),
