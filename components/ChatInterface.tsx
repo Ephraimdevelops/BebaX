@@ -1,199 +1,174 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation } from 'convex/react';
-import { api } from '@/convex/_generated/api';
-import { useUser } from '@clerk/nextjs';
-import { Send, X, MessageCircle, Loader2 } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { useState, useRef, useEffect } from 'react';
+import { Send, X, Phone, User } from 'lucide-react';
 
-interface ChatInterfaceProps {
-    rideId: any; // Id<"rides">
-    onClose: () => void;
+interface Message {
+    id: string;
+    text: string;
+    sender: 'user' | 'driver';
+    timestamp: Date;
 }
 
-const QUICK_REPLIES = [
-    "I'm here",
-    "Running 5 min late",
-    "On my way",
-    "Where are you?",
-    "Thank you!",
-];
+interface ChatInterfaceProps {
+    driverName?: string;
+    driverPhone?: string;
+    rideId?: string;
+    onClose?: () => void;
+}
 
-export default function ChatInterface({ rideId, onClose }: ChatInterfaceProps) {
-    const { user } = useUser();
-    const { toast } = useToast();
+export function ChatInterface({
+    driverName = 'Driver',
+    driverPhone,
+    rideId,
+    onClose
+}: ChatInterfaceProps) {
+    const [messages, setMessages] = useState<Message[]>([
+        { id: '1', text: 'Hello! I am on my way to pick you up.', sender: 'driver', timestamp: new Date(Date.now() - 60000) },
+    ]);
+    const [input, setInput] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    const messages = useQuery(api.messages.getByRide, { ride_id: rideId });
-    const sendMessage = useMutation(api.messages.send);
-    const markAsRead = useMutation(api.messages.markAsRead);
-
-    const [messageText, setMessageText] = useState('');
-    const [isSending, setIsSending] = useState(false);
-
-    // Auto-scroll to bottom when new messages arrive
-    useEffect(() => {
+    const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(() => {
+        scrollToBottom();
     }, [messages]);
 
-    // Mark messages as read when chat is opened
-    useEffect(() => {
-        if (messages && messages.length > 0) {
-            const unreadMessages = messages.filter(
-                (m) => !m.read && m.sender_clerk_id !== user?.id
-            );
+    const handleSend = () => {
+        if (!input.trim()) return;
 
-            unreadMessages.forEach((msg) => {
-                markAsRead({ ride_id: rideId });
-            });
+        const newMessage: Message = {
+            id: Date.now().toString(),
+            text: input.trim(),
+            sender: 'user',
+            timestamp: new Date(),
+        };
+
+        setMessages(prev => [...prev, newMessage]);
+        setInput('');
+
+        // Mock driver response
+        setTimeout(() => {
+            setMessages(prev => [...prev, {
+                id: (Date.now() + 1).toString(),
+                text: getAutoResponse(input),
+                sender: 'driver',
+                timestamp: new Date(),
+            }]);
+        }, 1500);
+    };
+
+    const getAutoResponse = (msg: string): string => {
+        const lower = msg.toLowerCase();
+        if (lower.includes('where') || lower.includes('location')) {
+            return 'I am about 5 minutes away. You can track me on the map!';
         }
-    }, [messages, user?.id]);
+        if (lower.includes('wait') || lower.includes('coming')) {
+            return 'No problem, take your time. I will wait for you.';
+        }
+        if (lower.includes('thank')) {
+            return 'You are welcome! See you soon.';
+        }
+        return 'Got it! I will be there shortly.';
+    };
 
-    const handleSend = async (text: string) => {
-        if (!text.trim()) return;
-
-        setIsSending(true);
-        try {
-            await sendMessage({
-                ride_id: rideId,
-                message: text.trim(),
-            });
-            setMessageText('');
-        } catch (error: any) {
-            toast({
-                title: 'Failed to send',
-                description: error.message || 'Please try again',
-                variant: 'destructive',
-            });
-        } finally {
-            setIsSending(false);
+    const handleCall = () => {
+        if (driverPhone) {
+            window.open(`tel:${driverPhone}`);
         }
     };
 
-    const handleQuickReply = (reply: string) => {
-        handleSend(reply);
+    const formatTime = (date: Date) => {
+        return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     };
-
-    if (!messages) {
-        return (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-                <div className="bg-white rounded-2xl p-8">
-                    <Loader2 className="w-8 h-8 text-bebax-green animate-spin mx-auto" />
-                </div>
-            </div>
-        );
-    }
 
     return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end md:items-center md:justify-center animate-fade-in">
-            <div className="bg-white w-full md:w-[500px] md:rounded-2xl rounded-t-3xl shadow-bebax-xl flex flex-col max-h-[90vh] md:max-h-[600px] animate-slide-up">
-                {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                    <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 bg-bebax-green-light rounded-full flex items-center justify-center">
-                            <MessageCircle className="w-5 h-5 text-bebax-green" />
-                        </div>
-                        <div>
-                            <h3 className="font-semibold text-bebax-black">Chat</h3>
-                            <p className="text-xs text-gray-500">Real-time messaging</p>
-                        </div>
+        <div className="flex flex-col h-full bg-white dark:bg-slate-900">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+                        <User className="w-5 h-5 text-white" />
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                        <X className="w-5 h-5 text-gray-600" />
-                    </button>
-                </div>
-
-                {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {messages.length === 0 ? (
-                        <div className="text-center py-12">
-                            <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                            <p className="text-gray-600">No messages yet</p>
-                            <p className="text-sm text-gray-500">Start the conversation!</p>
-                        </div>
-                    ) : (
-                        messages.map((msg) => {
-                            const isMe = msg.sender_clerk_id === user?.id;
-                            return (
-                                <div
-                                    key={msg._id}
-                                    className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}
-                                >
-                                    <div
-                                        className={`max-w-[75%] rounded-2xl px-4 py-2 ${isMe
-                                            ? 'bg-bebax-green text-white'
-                                            : 'bg-gray-100 text-bebax-black'
-                                            }`}
-                                    >
-                                        <p className="text-sm">{msg.message}</p>
-                                        <p
-                                            className={`text-xs mt-1 ${isMe ? 'text-white/70' : 'text-gray-500'
-                                                }`}
-                                        >
-                                            {new Date(msg.timestamp).toLocaleTimeString([], {
-                                                hour: '2-digit',
-                                                minute: '2-digit',
-                                            })}
-                                        </p>
-                                    </div>
-                                </div>
-                            );
-                        })
-                    )}
-                    <div ref={messagesEndRef} />
-                </div>
-
-                {/* Quick Replies */}
-                <div className="px-4 py-2 border-t border-gray-100">
-                    <div className="flex space-x-2 overflow-x-auto pb-2">
-                        {QUICK_REPLIES.map((reply) => (
-                            <button
-                                key={reply}
-                                onClick={() => handleQuickReply(reply)}
-                                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-sm font-medium text-gray-700 whitespace-nowrap transition-colors"
-                                disabled={isSending}
-                            >
-                                {reply}
-                            </button>
-                        ))}
+                    <div>
+                        <p className="font-bold text-slate-900 dark:text-white">{driverName}</p>
+                        <p className="text-xs text-green-500">Online • On the way</p>
                     </div>
                 </div>
-
-                {/* Input */}
-                <div className="p-4 border-t border-gray-200">
-                    <div className="flex items-center space-x-2">
-                        <input
-                            type="text"
-                            value={messageText}
-                            onChange={(e) => setMessageText(e.target.value)}
-                            onKeyPress={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    handleSend(messageText);
-                                }
-                            }}
-                            placeholder="Type a message..."
-                            className="flex-1 input-bebax"
-                            disabled={isSending}
-                        />
-                        <button
-                            onClick={() => handleSend(messageText)}
-                            disabled={isSending || !messageText.trim()}
-                            className="w-12 h-12 bg-bebax-green hover:bg-bebax-green/90 disabled:bg-gray-300 rounded-xl flex items-center justify-center transition-colors"
-                        >
-                            {isSending ? (
-                                <Loader2 className="w-5 h-5 text-white animate-spin" />
-                            ) : (
-                                <Send className="w-5 h-5 text-white" />
-                            )}
+                <div className="flex items-center gap-2">
+                    {driverPhone && (
+                        <button onClick={handleCall} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full">
+                            <Phone className="w-5 h-5 text-green-500" />
                         </button>
+                    )}
+                    {onClose && (
+                        <button onClick={onClose} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full">
+                            <X className="w-5 h-5 text-slate-500" />
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.map((msg) => (
+                    <div
+                        key={msg.id}
+                        className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                        <div
+                            className={`max-w-[75%] px-4 py-2 rounded-2xl ${msg.sender === 'user'
+                                    ? 'bg-purple-600 text-white rounded-br-md'
+                                    : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white rounded-bl-md'
+                                }`}
+                        >
+                            <p className="text-sm">{msg.text}</p>
+                            <p className={`text-xs mt-1 ${msg.sender === 'user' ? 'text-purple-200' : 'text-slate-400'}`}>
+                                {formatTime(msg.timestamp)}
+                            </p>
+                        </div>
                     </div>
+                ))}
+                <div ref={messagesEndRef} />
+            </div>
+
+            {/* Quick Replies */}
+            <div className="px-4 py-2 flex gap-2 overflow-x-auto">
+                {['I am coming down', 'Where are you?', 'Please wait', 'Thank you'].map((text) => (
+                    <button
+                        key={text}
+                        onClick={() => setInput(text)}
+                        className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded-full text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap hover:bg-slate-200 dark:hover:bg-slate-700"
+                    >
+                        {text}
+                    </button>
+                ))}
+            </div>
+
+            {/* Input */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2">
+                    <input
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                        placeholder="Type a message..."
+                        className="flex-1 px-4 py-3 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                    />
+                    <button
+                        onClick={handleSend}
+                        disabled={!input.trim()}
+                        className="w-12 h-12 bg-purple-600 rounded-full flex items-center justify-center disabled:opacity-50"
+                    >
+                        <Send className="w-5 h-5 text-white" />
+                    </button>
                 </div>
             </div>
         </div>
     );
 }
+
+export default ChatInterface;

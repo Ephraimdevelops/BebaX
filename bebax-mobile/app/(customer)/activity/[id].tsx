@@ -1,52 +1,48 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Colors } from '../../../src/constants/Colors';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// Mock Data lookup (replace with API call later)
-const MOCK_RIDES: Record<string, any> = {
-    '1': {
-        id: '1', date: 'Today, 2:30 PM', dest: 'Mlimani City Mall', pickup: 'Kijitonyama', price: 5000, status: 'Completed', vehicle: 'Bajaji',
-        driver: { name: 'Juma K', rating: 4.8, image: 'https://i.pravatar.cc/150?u=juma' },
-        items: '2 Boxes of Books',
-    },
-    '2': {
-        id: '2', date: 'Yesterday, 9:15 AM', dest: 'Posta Mpya', pickup: 'Sinza mori', price: 15000, status: 'Completed', vehicle: 'Kirikuu',
-        driver: { name: 'Ali M', rating: 4.9, image: 'https://i.pravatar.cc/150?u=ali' },
-        items: 'Sofa Set',
-    },
-    '3': {
-        id: '3', date: '12 Dec, 6:00 PM', dest: 'Mikocheni B', pickup: 'Mwenge', price: 0, status: 'Cancelled', vehicle: 'Boda',
-        driver: { name: 'Ben', rating: 4.5, image: 'https://i.pravatar.cc/150?u=ben' },
-        items: 'Documents',
-    }
-};
+import { useQuery } from 'convex/react';
+import { api } from '../../../src/convex/_generated/api';
 
 export default function ActivityDetail() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const [ride, setRide] = useState<any>(null);
 
-    useEffect(() => {
-        if (id && MOCK_RIDES[id as string]) {
-            setRide(MOCK_RIDES[id as string]);
-        }
-    }, [id]);
+    // Fetch real ride data
+    // @ts-ignore
+    const ride = useQuery(api.rides.getRide, { ride_id: id as any });
 
-    if (!ride) {
+    if (ride === undefined) {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator color={Colors.primary} size="large" />
+                <Text style={{ marginTop: 16, color: Colors.textDim }}>Loading connection...</Text>
+            </View>
+        );
+    }
+
+    if (ride === null) {
+        return (
+            <View style={styles.loadingContainer}>
+                <Text style={{ color: Colors.text }}>Trip not found</Text>
                 <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 20 }}>
-                    <Text>Go Back</Text>
+                    <Text style={{ color: Colors.primary }}>Go Back</Text>
                 </TouchableOpacity>
             </View>
         );
     }
+
+    const formatDate = (dateString: string) => {
+        return new Date(dateString).toLocaleDateString([], {
+            weekday: 'short', day: 'numeric', month: 'short',
+            hour: '2-digit', minute: '2-digit'
+        });
+    };
 
     return (
         <View style={styles.container}>
@@ -56,15 +52,20 @@ export default function ActivityDetail() {
                     provider={PROVIDER_DEFAULT}
                     style={styles.map}
                     initialRegion={{
-                        latitude: -6.771,
-                        longitude: 39.240,
+                        latitude: ride.pickup_location?.lat || -6.771,
+                        longitude: ride.pickup_location?.lng || 39.240,
                         latitudeDelta: 0.05,
                         longitudeDelta: 0.05,
                     }}
                     scrollEnabled={false}
                     zoomEnabled={false}
                 >
-                    <Marker coordinate={{ latitude: -6.771, longitude: 39.240 }} />
+                    {ride.pickup_location && (
+                        <Marker coordinate={{ latitude: ride.pickup_location.lat, longitude: ride.pickup_location.lng }} pinColor={Colors.primary} />
+                    )}
+                    {ride.dropoff_location && (
+                        <Marker coordinate={{ latitude: ride.dropoff_location.lat, longitude: ride.dropoff_location.lng }} pinColor="green" />
+                    )}
                 </MapView>
 
                 {/* Header Overlay */}
@@ -82,26 +83,35 @@ export default function ActivityDetail() {
                 {/* Status & Date */}
                 <View style={styles.section}>
                     <View style={styles.rowBetween}>
-                        <Text style={styles.dateText}>{ride.date}</Text>
-                        <View style={[styles.statusBadge, ride.status === 'Cancelled' ? styles.badgeCancelled : styles.badgeCompleted]}>
-                            <Text style={[styles.statusText, ride.status === 'Cancelled' ? styles.textCancelled : styles.textCompleted]}>
-                                {ride.status}
+                        <Text style={styles.dateText}>{formatDate(ride.created_at)}</Text>
+                        <View style={[styles.statusBadge, ride.status === 'cancelled' ? styles.badgeCancelled : styles.badgeCompleted]}>
+                            <Text style={[styles.statusText, ride.status === 'cancelled' ? styles.textCancelled : styles.textCompleted]}>
+                                {ride.status?.toUpperCase()}
                             </Text>
                         </View>
                     </View>
                 </View>
 
-                {/* Driver Info */}
-                <View style={styles.driverCard}>
-                    <Image source={{ uri: ride.driver.image }} style={styles.driverImage} />
-                    <View style={styles.driverInfo}>
-                        <Text style={styles.driverName}>{ride.driver.name}</Text>
-                        <Text style={styles.vehicleInfo}>{ride.vehicle} • {ride.driver.rating} ★</Text>
+                {/* Driver Info - Only show if driver assigned */}
+                {ride.driver_details && (
+                    <View style={styles.driverCard}>
+                        <Image
+                            source={{ uri: ride.driver_details.photo || 'https://i.pravatar.cc/150' }}
+                            style={styles.driverImage}
+                        />
+                        <View style={styles.driverInfo}>
+                            <Text style={styles.driverName}>{ride.driver_details.name || 'Unknown Driver'}</Text>
+                            <Text style={styles.vehicleInfo}>
+                                {ride.vehicle_type?.toUpperCase()} • {ride.driver_details.rating} ★
+                            </Text>
+                        </View>
+                        <View style={styles.priceContainer}>
+                            <Text style={styles.priceText}>
+                                TSh {(ride.final_fare || ride.fare_estimate).toLocaleString()}
+                            </Text>
+                        </View>
                     </View>
-                    <View style={styles.priceContainer}>
-                        <Text style={styles.priceText}>TSh {ride.price.toLocaleString()}</Text>
-                    </View>
-                </View>
+                )}
 
                 {/* Route */}
                 <View style={styles.sectionCard}>
@@ -115,26 +125,30 @@ export default function ActivityDetail() {
                         <View style={styles.addresses}>
                             <View style={styles.addressBlock}>
                                 <Text style={styles.addressLabel}>Pickup</Text>
-                                <Text style={styles.addressText}>{ride.pickup}</Text>
+                                <Text style={styles.addressText} numberOfLines={2}>
+                                    {ride.pickup_location?.address}
+                                </Text>
                             </View>
                             <View style={styles.addressBlock}>
                                 <Text style={styles.addressLabel}>Dropoff</Text>
-                                <Text style={styles.addressText}>{ride.dest}</Text>
+                                <Text style={styles.addressText} numberOfLines={2}>
+                                    {ride.dropoff_location?.address}
+                                </Text>
                             </View>
                         </View>
                     </View>
                 </View>
 
-                {/* Items Description */}
-                {ride.items && (
-                    <View style={styles.sectionCard}>
-                        <Text style={styles.sectionHeader}>ITEMS</Text>
-                        <View style={styles.itemsRow}>
-                            <FontAwesome5 name="box-open" size={20} color={Colors.primary} />
-                            <Text style={styles.itemsText}>{ride.items}</Text>
-                        </View>
+                {/* Cargo Details */}
+                <View style={styles.sectionCard}>
+                    <Text style={styles.sectionHeader}>CARGO DETAILS</Text>
+                    <View style={styles.itemsRow}>
+                        <FontAwesome5 name="box-open" size={20} color={Colors.primary} />
+                        <Text style={styles.itemsText}>
+                            {ride.cargo_description || 'No description provided'}
+                        </Text>
                     </View>
-                )}
+                </View>
 
                 {/* Actions */}
                 <View style={styles.actionContainer}>

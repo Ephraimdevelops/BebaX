@@ -22,7 +22,9 @@ export default {
             bundleIdentifier: "com.bebax.movingtrucks",
             infoPlist: {
                 NSLocationWhenInUseUsageDescription: "BebaX needs location access to show pickup and dropoff locations",
-                NSCameraUsageDescription: "BebaX needs camera access to upload driver documents"
+                NSLocationAlwaysAndWhenInUseUsageDescription: "BebaX needs background location to track your trip even when the app is closed",
+                NSCameraUsageDescription: "BebaX needs camera access to upload driver documents",
+                UIBackgroundModes: ["location", "fetch", "remote-notification"]
             }
         },
         android: {
@@ -34,6 +36,8 @@ export default {
             permissions: [
                 "ACCESS_COARSE_LOCATION",
                 "ACCESS_FINE_LOCATION",
+                "ACCESS_BACKGROUND_LOCATION",
+                "FOREGROUND_SERVICE",
                 "CAMERA"
             ],
             config: {

@@ -17,6 +17,12 @@ export const trigger = mutation({
             throw new Error("Not authenticated");
         }
 
+        // Get user profile for notification
+        const userProfile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+            .first();
+
         const alertId = await ctx.db.insert("sos_alerts", {
             user_clerk_id: identity.subject,
             ride_id: args.ride_id,
@@ -25,20 +31,37 @@ export const trigger = mutation({
             created_at: new Date().toISOString(),
         });
 
-        // Create urgent notification for all admins
+        // Create in-app notifications for all admins
         const admins = await ctx.db
             .query("userProfiles")
-            .filter((q) => q.eq(q.field("role"), "admin"))
+            .filter((q: any) => q.eq(q.field("role"), "admin"))
             .collect();
+
+        // Get admin push tokens
+        const adminTokens = admins
+            .filter(a => a.pushToken)
+            .map(a => a.pushToken as string);
 
         for (const admin of admins) {
             await ctx.db.insert("notifications", {
                 user_clerk_id: admin.clerkId,
                 type: "sos_alert",
                 title: "🆘 SOS ALERT",
-                body: `Emergency alert triggered at ${args.location.address}`,
+                body: `Emergency alert triggered at ${args.location.address} `,
                 read: false,
                 created_at: new Date().toISOString(),
+            });
+        }
+
+        // Schedule push notification to admins (runs immediately)
+        if (adminTokens.length > 0) {
+            // Using string path to avoid TS2589 type recursion issue
+            await ctx.scheduler.runAfter(0, "pushNotifications:notifyAdminsSOS" as any, {
+                admin_tokens: adminTokens,
+                user_name: userProfile?.name || "Unknown User",
+                user_phone: userProfile?.phone || "N/A",
+                location_address: args.location.address,
+                sos_id: alertId as unknown as string,
             });
         }
 

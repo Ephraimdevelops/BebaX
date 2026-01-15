@@ -23,6 +23,12 @@ export const register = mutation({
             throw new Error("Not authenticated");
         }
 
+        // Get user profile for name
+        const userProfile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", identity.subject))
+            .first();
+
         const existingDriver = await ctx.db
             .query("drivers")
             .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
@@ -32,12 +38,18 @@ export const register = mutation({
             throw new Error("Driver already registered");
         }
 
+        // Auto-Verification Logic
+        // Tier 1 & 2 (Boda, Toyo, Kirikuu, Pickup, Canter) -> Auto Verify (Low Risk)
+        // Tier 3 (Fuso, Trailer) -> Manual Verify (High Risk / Commercial)
+        const AUTO_VERIFY_TYPES = ["boda", "toyo", "kirikuu", "pickup", "canter"];
+        const isAutoVerified = AUTO_VERIFY_TYPES.includes(args.vehicle_type);
+
         const driverId = await ctx.db.insert("drivers", {
             clerkId: identity.subject,
             license_number: args.license_number,
             nida_number: args.nida_number,
             documents: {},
-            verified: false,
+            verified: isAutoVerified, // Dynamic verification status
 
             is_online: false,
             current_location: {
@@ -58,6 +70,55 @@ export const register = mutation({
             wallet_locked: false,
             created_at: new Date().toISOString(),
         });
+
+        // Create Vehicle Record
+        // Pricing defaults based on type
+        const pricing: Record<string, { base: number; km: number }> = {
+            boda: { base: 1000, km: 500 },
+            toyo: { base: 1500, km: 700 },
+            kirikuu: { base: 3000, km: 1000 },
+            pickup: { base: 5000, km: 1500 },
+            canter: { base: 10000, km: 2000 },
+            fuso: { base: 20000, km: 3000 },
+            semitrailer: { base: 50000, km: 5000 },
+            van: { base: 7000, km: 1200 },
+            truck: { base: 15000, km: 2500 },
+            tricycle: { base: 1500, km: 700 },
+        };
+        const rates = pricing[args.vehicle_type] || { base: 2000, km: 1000 };
+
+        await ctx.db.insert("vehicles", {
+            driver_clerk_id: identity.subject,
+            type: args.vehicle_type as any,
+            plate_number: args.vehicle_plate,
+            capacity_kg: args.capacity_kg,
+            photos: [], // Initializes empty, user adds later via vehicle.tsx
+            base_fare: rates.base,
+            per_km_rate: rates.km,
+            created_at: new Date().toISOString(),
+        });
+
+        // Notify admins of new driver (especially if manual verify needed)
+        if (!isAutoVerified) {
+            const admins = await ctx.db
+                .query("userProfiles")
+                .filter((q: any) => q.eq(q.field("role"), "admin"))
+                .collect();
+
+            const adminTokens = admins
+                .filter(a => a.pushToken)
+                .map(a => a.pushToken as string);
+
+            if (adminTokens.length > 0) {
+                // Using string path to avoid TS2589 type recursion issue
+                await ctx.scheduler.runAfter(0, "pushNotifications:notifyAdminsNewDriver" as any, {
+                    admin_tokens: adminTokens,
+                    driver_name: userProfile?.name || "New Driver",
+                    vehicle_type: args.vehicle_type,
+                    driver_id: driverId.toString(),
+                });
+            }
+        }
 
         return driverId;
     },
@@ -477,4 +538,97 @@ export const getDocumentUrls = query({
             verified: driver.verified,
         };
     },
+});
+// Admin: Get live heatmap of all active drivers ("God Eye")
+export const getClusterMap = query({
+    args: {},
+    handler: async (ctx) => {
+        // 1. Verify Admin Access
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Unauthorized");
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        // Allow 'admin' or 'fleet_owner' to see this
+        if (!user || (user.role !== "admin" && user.role !== "fleet_owner")) {
+            throw new Error("Unauthorized: Fleet Command Access Required");
+        }
+
+        // 2. Fetch Active Drivers (Online Only)
+        // Optimization: Use `by_online_status` index
+        const drivers = await ctx.db
+            .query("drivers")
+            .withIndex("by_online_status", (q) => q.eq("is_online", true))
+            .collect();
+
+        // 3. Return Filtered Data Points (Minimal payload for Map)
+        return drivers.map(d => ({
+            _id: d._id,
+            location: d.current_location,
+            vehicle_type: d.vehicle_type,
+            heading: 0, // Placeholder for future telemetry
+            status: d.is_busy ? "busy" : (d.verified ? "active" : "unverified"),
+            name: "Driver" // Privacy: Don't send full name unless tapped
+        }));
+    }
+});
+
+// ============================================
+// ADMIN QUERIES FOR WAR ROOM
+// ============================================
+
+// Get all online drivers (for God Eye)
+export const getOnlineDrivers = query({
+    args: {},
+    handler: async (ctx) => {
+        const drivers = await ctx.db
+            .query("drivers")
+            .withIndex("by_online_status", (q: any) => q.eq("is_online", true))
+            .collect();
+
+        return drivers.map(d => ({
+            _id: d._id,
+            name: d.vehicle_type.toUpperCase(), // Show vehicle type for privacy
+            current_location: d.current_location,
+            vehicle_type: d.vehicle_type,
+            current_ride_id: null, // TODO: Add to schema if needed
+            verified: d.verified,
+            is_busy: d.is_busy, // Added field
+        }));
+    }
+});
+
+// Get all drivers (for Driver Manager)
+export const getAllDrivers = query({
+    args: {},
+    handler: async (ctx) => {
+        const drivers = await ctx.db.query("drivers").collect();
+
+        // Enrich with user profile data
+        const enriched = await Promise.all(
+            drivers.map(async (d) => {
+                const profile = await ctx.db
+                    .query("userProfiles")
+                    .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", d.clerkId))
+                    .first();
+
+                return {
+                    _id: d._id,
+                    name: profile?.name || d.vehicle_type,
+                    phone: profile?.phone || 'N/A',
+                    vehicle_type: d.vehicle_type,
+                    verified: d.verified,
+                    banned: false, // TODO: Add banned field to schema
+                    is_online: d.is_online,
+                    rating: d.rating,
+                    total_trips: d.total_trips,
+                };
+            })
+        );
+
+        return enriched;
+    }
 });

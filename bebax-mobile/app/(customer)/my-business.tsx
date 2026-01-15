@@ -3,20 +3,20 @@ import {
     View,
     Text,
     StyleSheet,
-    ScrollView,
     TouchableOpacity,
+    Image,
     Alert,
     ActivityIndicator,
-    RefreshControl,
+    ScrollView,
     Dimensions,
+    TextInput,
 } from 'react-native';
 import { Colors } from '../../src/constants/Colors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convex/_generated/api';
-import { Id } from '../../src/convex/_generated/dataModel';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -27,463 +27,383 @@ export default function MyBusinessScreen() {
     const router = useRouter();
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const [analyticsPeriod, setAnalyticsPeriod] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
-    const [refreshing, setRefreshing] = useState(false);
-    const [showPostModal, setShowPostModal] = useState(false);
 
     // Queries
+    const [showStaffModal, setShowStaffModal] = useState(false);
+    const [staffName, setStaffName] = useState('');
+    const [staffPhone, setStaffPhone] = useState('');
+    const addStaff = useMutation(api.b2b.addStaff);
+
     const orgData = useQuery(api.b2b.getOrgStats);
-    const analytics = useQuery(api.b2b.getBusinessAnalytics, { period: analyticsPeriod });
-    const contractedDrivers = useQuery(api.b2b.getContractedDrivers);
-    const myListings = useQuery(api.businessListings.getListings, {});
+    const showroomStats = useQuery(api.b2b.getShowroomStats);
+    const myListings = useQuery(api.businessListings.getListings, {}) || [];
 
     // Filter to show only my org's listings
-    const myOrgListings = myListings?.filter(l =>
+    const myOrgListings = myListings.filter(l =>
         orgData?.organization && l.organizationId === orgData.organization._id
     ) || [];
 
-    const onRefresh = () => {
-        setRefreshing(true);
-        setTimeout(() => setRefreshing(false), 1000);
-    };
-
     if (orgData === undefined) {
         return (
-            <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
+            <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
                 <ActivityIndicator size="large" color={Colors.primary} />
-                <Text style={styles.loadingText}>Loading your business...</Text>
+                <Text style={styles.loadingText}>Loading Business Profile...</Text>
             </View>
         );
     }
 
     if (!orgData) {
         return (
-            <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
+            <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
                 <MaterialIcons name="store" size={80} color={Colors.textDim} />
                 <Text style={styles.emptyTitle}>No Business Registered</Text>
-                <Text style={styles.emptyText}>Register your business to start posting logistics jobs</Text>
                 <TouchableOpacity
                     style={styles.registerButton}
                     onPress={() => router.push('/(customer)/list-business')}
                 >
-                    <Text style={styles.registerButtonText}>Register Business</Text>
+                    <Text style={styles.registerButtonText}>Register Now</Text>
                 </TouchableOpacity>
             </View>
         );
     }
 
     const { organization, stats } = orgData;
+    const leadsCount = showroomStats?.leads || 0;
+    const viewsCount = showroomStats?.views || 0;
+    const activeListingsCount = myOrgListings.length;
 
     const TABS: { id: TabId; label: string; icon: string }[] = [
         { id: 'overview', label: 'Overview', icon: 'dashboard' },
-        { id: 'listings', label: 'Listings', icon: 'list-alt' },
-        { id: 'analytics', label: 'Analytics', icon: 'insights' },
-        { id: 'drivers', label: 'Drivers', icon: 'people' },
+        { id: 'listings', label: 'Products', icon: 'inventory' },
+        { id: 'analytics', label: 'Stats', icon: 'insights' },
+        { id: 'drivers', label: 'Team', icon: 'people' },
     ];
 
-    const renderOverview = () => (
-        <View style={styles.tabContent}>
-            {/* Business Card */}
-            <View style={styles.businessCard}>
-                <View style={styles.businessIcon}>
-                    <MaterialIcons name="business" size={32} color={Colors.primary} />
-                </View>
-                <View style={styles.businessInfo}>
-                    <Text style={styles.businessName}>{organization.name}</Text>
-                    <View style={styles.tierRow}>
-                        <View style={[styles.tierBadge, { backgroundColor: organization.tier === 'enterprise' ? '#8B5CF6' : organization.tier === 'business' ? '#3B82F6' : Colors.primary }]}>
-                            <Text style={styles.tierText}>{(organization.tier || 'starter').toUpperCase()}</Text>
+    const renderHeader = () => (
+        <View style={styles.header}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                <Ionicons name="arrow-back" size={24} color={Colors.text} />
+            </TouchableOpacity>
+
+            <View style={styles.profileRow}>
+                <View style={styles.avatarWrapper}>
+                    {organization.logo ? (
+                        <Image source={{ uri: organization.logo }} style={styles.avatar} />
+                    ) : (
+                        <View style={[styles.avatar, styles.placeholderAvatar]}>
+                            <MaterialIcons name="store" size={32} color={Colors.primary} />
                         </View>
-                        {organization.verified ? (
-                            <MaterialIcons name="verified" size={18} color="#10B981" />
-                        ) : (
-                            <View style={styles.pendingBadge}>
-                                <Text style={styles.pendingText}>Pending</Text>
-                            </View>
-                        )}
+                    )}
+                    {organization.verified && (
+                        <View style={styles.verifiedBadgeIcon}>
+                            <MaterialIcons name="verified" size={14} color="#FFF" />
+                        </View>
+                    )}
+                </View>
+                <View style={styles.profileInfo}>
+                    <Text style={styles.name}>{organization.name}</Text>
+                    <View style={[styles.tierBadge, {
+                        backgroundColor: organization.tier === 'enterprise' ? '#8B5CF6' :
+                            organization.tier === 'business' ? '#3B82F6' : Colors.primary
+                    }]}>
+                        <Text style={styles.tierText}>{(organization.tier || 'Starter').toUpperCase()}</Text>
                     </View>
                 </View>
             </View>
 
-            {/* Stats Grid */}
-            <View style={styles.statsGrid}>
-                <View style={styles.statCard}>
-                    <MaterialIcons name="local-shipping" size={24} color={Colors.primary} />
-                    <Text style={styles.statValue}>{stats.totalRides}</Text>
-                    <Text style={styles.statLabel}>Total Trips</Text>
+            {/* QUICK STATS */}
+            <View style={styles.statsRow}>
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>{viewsCount}</Text>
+                    <Text style={styles.statLabel}>Views</Text>
                 </View>
-                <View style={styles.statCard}>
-                    <MaterialIcons name="check-circle" size={24} color="#10B981" />
-                    <Text style={styles.statValue}>{stats.completedRides}</Text>
-                    <Text style={styles.statLabel}>Completed</Text>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>{activeListingsCount}</Text>
+                    <Text style={styles.statLabel}>Listings</Text>
                 </View>
-                <View style={styles.statCard}>
-                    <MaterialIcons name="people" size={24} color="#6366F1" />
-                    <Text style={styles.statValue}>{stats.totalMembers}</Text>
-                    <Text style={styles.statLabel}>Team</Text>
-                </View>
-                <View style={styles.statCard}>
-                    <MaterialIcons name="account-balance-wallet" size={24} color="#F59E0B" />
-                    <Text style={styles.statValue}>Tsh {(stats.walletBalance || 0).toLocaleString()}</Text>
-                    <Text style={styles.statLabel}>Balance</Text>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>{leadsCount}</Text>
+                    <Text style={styles.statLabel}>Leads</Text>
                 </View>
             </View>
-
-            {/* Quick Actions */}
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <View style={styles.actionsRow}>
-                <TouchableOpacity style={styles.actionCard} onPress={() => setActiveTab('listings')}>
-                    <View style={[styles.actionIcon, { backgroundColor: '#10B98120' }]}>
-                        <MaterialIcons name="add-circle" size={24} color="#10B981" />
-                    </View>
-                    <Text style={styles.actionLabel}>Post Job</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/(customer)/dashboard')}>
-                    <View style={[styles.actionIcon, { backgroundColor: '#3B82F620' }]}>
-                        <MaterialIcons name="local-taxi" size={24} color="#3B82F6" />
-                    </View>
-                    <Text style={styles.actionLabel}>Book Ride</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionCard} onPress={() => setActiveTab('analytics')}>
-                    <View style={[styles.actionIcon, { backgroundColor: '#F59E0B20' }]}>
-                        <MaterialIcons name="insights" size={24} color="#F59E0B" />
-                    </View>
-                    <Text style={styles.actionLabel}>Reports</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Location */}
-            {organization.location && (
-                <View style={styles.locationCard}>
-                    <MaterialIcons name="location-on" size={20} color={Colors.primary} />
-                    <View style={styles.locationInfo}>
-                        <Text style={styles.locationLabel}>Business Location</Text>
-                        <Text style={styles.locationAddress}>{organization.location.address}</Text>
-                    </View>
-                </View>
-            )}
         </View>
     );
 
-    const renderListings = () => (
-        <View style={styles.tabContent}>
-            <View style={styles.listingsHeader}>
-                <Text style={styles.sectionTitle}>My Job Listings ({myOrgListings.length})</Text>
+    const renderTabs = () => (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
+            {TABS.map((tab) => (
                 <TouchableOpacity
-                    style={styles.addButton}
-                    onPress={() => Alert.alert("Post Job", "Job posting form coming soon!")}
+                    key={tab.id}
+                    style={[styles.tab, activeTab === tab.id && styles.activeTab]}
+                    onPress={() => setActiveTab(tab.id)}
                 >
-                    <MaterialIcons name="add" size={20} color="white" />
-                    <Text style={styles.addButtonText}>New</Text>
+                    <MaterialIcons
+                        name={tab.icon as any}
+                        size={18}
+                        color={activeTab === tab.id ? '#FFF' : Colors.textDim}
+                    />
+                    <Text style={[styles.tabText, activeTab === tab.id && styles.activeTabText]}>
+                        {tab.label}
+                    </Text>
                 </TouchableOpacity>
-            </View>
+            ))}
+        </ScrollView>
+    );
 
-            {myOrgListings.length === 0 ? (
-                <View style={styles.emptyListings}>
-                    <MaterialIcons name="post-add" size={48} color={Colors.textDim} />
-                    <Text style={styles.emptyListingsText}>No job listings yet</Text>
-                    <Text style={styles.emptyListingsSubtext}>Post a job to find drivers</Text>
-                </View>
-            ) : (
-                myOrgListings.map((listing) => (
-                    <TouchableOpacity
-                        key={listing._id}
-                        style={styles.listingCard}
-                        onPress={() => Alert.alert("Listing Detail", "View applicants and trips for this listing")}
-                    >
-                        <View style={styles.listingHeader}>
-                            <Text style={styles.listingTitle}>{listing.title}</Text>
-                            <View style={[styles.statusBadge, listing.isActive ? styles.activeBadge : styles.inactiveBadge]}>
-                                <Text style={[styles.statusText, { color: listing.isActive ? '#10B981' : '#6B7280' }]}>
-                                    {listing.isActive ? 'Active' : 'Closed'}
-                                </Text>
+
+
+    const handleAddStaff = async () => {
+        if (!staffName || !staffPhone) return;
+        try {
+            const res = await addStaff({ name: staffName, phone: staffPhone });
+            Alert.alert(res.success ? "Success" : "Notice", res.message);
+            setShowStaffModal(false);
+            setStaffName('');
+            setStaffPhone('');
+        } catch (err: any) {
+            Alert.alert("Error", err.message);
+        }
+    };
+
+    // Placeholder Content for Tabs
+    const renderContent = () => {
+        if (activeTab === 'listings') {
+            return (
+                <View style={styles.section}>
+                    <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/(customer)/manage-products')}>
+                        <View style={[styles.iconBox, { backgroundColor: '#E0F2FE' }]}>
+                            <MaterialIcons name="add-circle" size={24} color="#0284C7" />
+                        </View>
+                        <View style={styles.actionInfo}>
+                            <Text style={styles.actionTitle}>Manage Products</Text>
+                            <Text style={styles.actionSub}>Add or edit showroom inventory</Text>
+                        </View>
+                        <MaterialIcons name="chevron-right" size={24} color="#CCC" />
+                    </TouchableOpacity>
+
+                    {myOrgListings.map((item: any) => (
+                        <View key={item._id} style={styles.listingItem}>
+                            <Image source={{ uri: item.image || 'https://via.placeholder.com/60' }} style={styles.listingImg} />
+                            <View style={styles.listingInfo}>
+                                <Text style={styles.listingTitle}>{item.name}</Text>
+                                <Text style={styles.listingPrice}>{item.price ? `Tsh ${item.price.toLocaleString()}` : 'Contact for Price'}</Text>
                             </View>
                         </View>
-                        <Text style={styles.listingMeta}>
-                            {listing.routeType} • {listing.frequency} • {listing.estimatedMonthlyTrips} trips/mo
-                        </Text>
-                        <View style={styles.listingStats}>
-                            <View style={styles.listingStat}>
-                                <MaterialIcons name="inbox" size={14} color={Colors.textDim} />
-                                <Text style={styles.listingStatText}>Applications</Text>
-                            </View>
-                            <View style={styles.listingStat}>
-                                <MaterialIcons name="local-shipping" size={14} color={Colors.textDim} />
-                                <Text style={styles.listingStatText}>Trips</Text>
-                            </View>
-                            <MaterialIcons name="chevron-right" size={20} color={Colors.textDim} />
+                    ))}
+                </View>
+            );
+        }
+
+        if (activeTab === 'drivers') { // TEAM Tab
+            return (
+                <View style={styles.section}>
+                    <TouchableOpacity style={styles.actionCard} onPress={() => setShowStaffModal(true)}>
+                        <View style={[styles.iconBox, { backgroundColor: '#F0FDF4' }]}>
+                            <Ionicons name="person-add" size={24} color="#16A34A" />
+                        </View>
+                        <View style={styles.actionInfo}>
+                            <Text style={styles.actionTitle}>Add Staff Member</Text>
+                            <Text style={styles.actionSub}>Grant booking access (No wallet access)</Text>
                         </View>
                     </TouchableOpacity>
-                ))
-            )}
-        </View>
-    );
 
-    const renderAnalytics = () => (
-        <View style={styles.tabContent}>
-            {/* Period Selector */}
-            <View style={styles.periodSelector}>
-                {(['daily', 'weekly', 'monthly'] as const).map((period) => (
-                    <TouchableOpacity
-                        key={period}
-                        style={[styles.periodButton, analyticsPeriod === period && styles.periodButtonActive]}
-                        onPress={() => setAnalyticsPeriod(period)}
-                    >
-                        <Text style={[styles.periodText, analyticsPeriod === period && styles.periodTextActive]}>
-                            {period.charAt(0).toUpperCase() + period.slice(1)}
-                        </Text>
+                    <Text style={styles.sectionHeader}>Team Members</Text>
+                    {stats?.totalMembers ? (
+                        <View style={styles.listingItem}>
+                            <View style={[styles.listingImg, { justifyContent: 'center', alignItems: 'center' }]}>
+                                <Text style={{ fontWeight: '700' }}>YOU</Text>
+                            </View>
+                            <View style={styles.listingInfo}>
+                                <Text style={styles.listingTitle}>Admin (You)</Text>
+                                <Text style={styles.listingPrice}>Full Access</Text>
+                            </View>
+                        </View>
+                    ) : (
+                        <Text style={styles.emptyText}>No staff added yet.</Text>
+                    )}
+
+                    {/* Modal Overlay would go here or use a Modal component */}
+                    {showStaffModal && (
+                        <View style={styles.modalOverlay}>
+                            <View style={styles.modalCard}>
+                                <Text style={styles.modalTitle}>Add Staff</Text>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    placeholder="Staff Name"
+                                    value={staffName}
+                                    onChangeText={setStaffName}
+                                />
+                                <TextInput
+                                    style={styles.modalInput}
+                                    placeholder="Phone (e.g. +255...)"
+                                    keyboardType="phone-pad"
+                                    value={staffPhone}
+                                    onChangeText={setStaffPhone}
+                                />
+                                <View style={styles.modalActions}>
+                                    <TouchableOpacity onPress={() => setShowStaffModal(false)}>
+                                        <Text style={styles.modalCancel}>Cancel</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity style={styles.modalSave} onPress={handleAddStaff}>
+                                        <Text style={styles.modalSaveText}>Add User</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
+                    )}
+                </View>
+            );
+        }
+
+        // Default Overview Layout
+        return (
+            <View style={styles.section}>
+                <Text style={styles.sectionHeader}>Quick Actions</Text>
+                <View style={styles.grid}>
+                    <TouchableOpacity style={[styles.gridItem, { backgroundColor: '#1E293B' }]} onPress={() => router.push('/(business)/dispatch')}>
+                        <MaterialIcons name="local-shipping" size={28} color="#FFF" />
+                        <Text style={[styles.gridLabel, { color: '#FFF' }]}>Dispatch Console</Text>
                     </TouchableOpacity>
-                ))}
+                    <TouchableOpacity style={styles.gridItem} onPress={() => setActiveTab('listings')}>
+                        <MaterialIcons name="storefront" size={28} color="#10B981" />
+                        <Text style={styles.gridLabel}>Showroom</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.gridItem} onPress={() => router.push('/(customer)/wallet')}>
+                        <MaterialIcons name="account-balance-wallet" size={28} color="#F59E0B" />
+                        <Text style={styles.gridLabel}>Wallet</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.gridItem} onPress={() => router.push('/(customer)/activity')}>
+                        <MaterialIcons name="receipt-long" size={28} color="#6366F1" />
+                        <Text style={styles.gridLabel}>Orders</Text>
+                    </TouchableOpacity>
+                </View>
+
+                <Text style={[styles.sectionHeader, { marginTop: 24 }]}>Recent Activity</Text>
+                <View style={styles.emptyCard}>
+                    <MaterialIcons name="history" size={48} color="#CBD5E1" />
+                    <Text style={styles.emptyText}>No recent activity</Text>
+                </View>
             </View>
-
-            {analytics === undefined ? (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={Colors.primary} />
-                </View>
-            ) : analytics ? (
-                <>
-                    {/* Summary Cards */}
-                    <View style={styles.analyticsGrid}>
-                        <View style={[styles.analyticsCard, { backgroundColor: '#EFF6FF' }]}>
-                            <Text style={styles.analyticsValue}>{analytics.summary.totalTrips}</Text>
-                            <Text style={styles.analyticsLabel}>Total Trips</Text>
-                        </View>
-                        <View style={[styles.analyticsCard, { backgroundColor: '#F0FDF4' }]}>
-                            <Text style={styles.analyticsValue}>Tsh {analytics.summary.totalSpend.toLocaleString()}</Text>
-                            <Text style={styles.analyticsLabel}>Total Spend</Text>
-                        </View>
-                        <View style={[styles.analyticsCard, { backgroundColor: '#FEF3C7' }]}>
-                            <Text style={styles.analyticsValue}>Tsh {analytics.summary.totalCommission.toLocaleString()}</Text>
-                            <Text style={styles.analyticsLabel}>Commission ({(analytics.commissionRate * 100).toFixed(0)}%)</Text>
-                        </View>
-                        <View style={[styles.analyticsCard, { backgroundColor: '#FDF4FF' }]}>
-                            <Text style={styles.analyticsValue}>Tsh {analytics.summary.avgCostPerDelivery.toLocaleString()}</Text>
-                            <Text style={styles.analyticsLabel}>Avg per Trip</Text>
-                        </View>
-                    </View>
-
-                    {/* Active Trips */}
-                    <View style={styles.activeTripsCard}>
-                        <View style={styles.activeTripsHeader}>
-                            <Text style={styles.activeTripsTitle}>Active Right Now</Text>
-                            <View style={styles.activeDot} />
-                        </View>
-                        <View style={styles.activeTripsStats}>
-                            <View style={styles.activeTripItem}>
-                                <Text style={styles.activeTripValue}>{analytics.summary.pendingTrips}</Text>
-                                <Text style={styles.activeTripLabel}>Pending</Text>
-                            </View>
-                            <View style={styles.activeTripItem}>
-                                <Text style={styles.activeTripValue}>{analytics.summary.activeTrips}</Text>
-                                <Text style={styles.activeTripLabel}>In Progress</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Wallet Balance */}
-                    <View style={styles.walletCard}>
-                        <MaterialIcons name="account-balance-wallet" size={24} color={Colors.primary} />
-                        <View style={styles.walletInfo}>
-                            <Text style={styles.walletLabel}>Wallet Balance</Text>
-                            <Text style={styles.walletValue}>Tsh {(analytics.walletBalance || 0).toLocaleString()}</Text>
-                        </View>
-                        <TouchableOpacity style={styles.topUpButton}>
-                            <Text style={styles.topUpText}>Top Up</Text>
-                        </TouchableOpacity>
-                    </View>
-                </>
-            ) : (
-                <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No analytics data available</Text>
-                </View>
-            )}
-        </View>
-    );
-
-    const renderDrivers = () => (
-        <View style={styles.tabContent}>
-            <Text style={styles.sectionTitle}>Contracted Drivers ({contractedDrivers?.length || 0})</Text>
-
-            {contractedDrivers === undefined ? (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={Colors.primary} />
-                </View>
-            ) : contractedDrivers.length === 0 ? (
-                <View style={styles.emptyListings}>
-                    <MaterialIcons name="people-outline" size={48} color={Colors.textDim} />
-                    <Text style={styles.emptyListingsText}>No contracted drivers yet</Text>
-                    <Text style={styles.emptyListingsSubtext}>Accept driver applications to build your team</Text>
-                </View>
-            ) : (
-                contractedDrivers.map((driver, index) => (
-                    <View key={driver.clerkId || index} style={styles.driverCard}>
-                        <View style={styles.driverAvatar}>
-                            <MaterialIcons name="person" size={28} color={Colors.primary} />
-                        </View>
-                        <View style={styles.driverInfo}>
-                            <Text style={styles.driverName}>{driver.name}</Text>
-                            <View style={styles.driverMeta}>
-                                <MaterialIcons name="star" size={14} color="#F59E0B" />
-                                <Text style={styles.driverRating}>{driver.rating.toFixed(1)}</Text>
-                                <Text style={styles.driverTrips}>{driver.totalTripsForOrg} trips</Text>
-                            </View>
-                        </View>
-                        <View style={styles.driverStatus}>
-                            <View style={[styles.onlineIndicator, { backgroundColor: driver.isOnline ? '#10B981' : '#9CA3AF' }]} />
-                            <Text style={styles.onlineText}>{driver.isOnline ? 'Online' : 'Offline'}</Text>
-                        </View>
-                    </View>
-                ))
-            )}
-        </View>
-    );
+        );
+    };
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top }]}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color={Colors.text} />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>My Business</Text>
-                <TouchableOpacity style={styles.settingsButton}>
-                    <MaterialIcons name="settings" size={22} color={Colors.textDim} />
-                </TouchableOpacity>
-            </View>
-
-            {/* Tab Bar */}
-            <View style={styles.tabBar}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBarContent}>
-                    {TABS.map((tab) => (
-                        <TouchableOpacity
-                            key={tab.id}
-                            style={[styles.tab, activeTab === tab.id && styles.tabActive]}
-                            onPress={() => setActiveTab(tab.id)}
-                        >
-                            <MaterialIcons
-                                name={tab.icon as any}
-                                size={20}
-                                color={activeTab === tab.id ? Colors.primary : Colors.textDim}
-                            />
-                            <Text style={[styles.tabText, activeTab === tab.id && styles.tabTextActive]}>
-                                {tab.label}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
-                </ScrollView>
-            </View>
-
-            <ScrollView
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />
-                }
-            >
-                {activeTab === 'overview' && renderOverview()}
-                {activeTab === 'listings' && renderListings()}
-                {activeTab === 'analytics' && renderAnalytics()}
-                {activeTab === 'drivers' && renderDrivers()}
+        <View style={styles.container}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top }]}>
+                {renderHeader()}
+                {renderTabs()}
+                {renderContent()}
             </ScrollView>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: Colors.background },
-    centered: { justifyContent: 'center', alignItems: 'center', padding: 40 },
-    loadingText: { color: Colors.textDim, marginTop: 16 },
-    emptyTitle: { fontSize: 20, fontWeight: 'bold', color: Colors.textLight, marginTop: 16 },
-    emptyText: { color: Colors.textDim, textAlign: 'center', marginTop: 8, marginBottom: 24 },
-    registerButton: { backgroundColor: Colors.primary, paddingVertical: 14, paddingHorizontal: 32, borderRadius: 12 },
-    registerButtonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: Colors.border },
-    backButton: { padding: 8 },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: Colors.text },
-    settingsButton: { padding: 8 },
-    tabBar: { backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: Colors.border },
-    tabBarContent: { paddingHorizontal: 12 },
-    tab: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, marginRight: 4, gap: 6 },
-    tabActive: { borderBottomWidth: 2, borderBottomColor: Colors.primary },
-    tabText: { fontSize: 14, fontWeight: '600', color: Colors.textDim },
-    tabTextActive: { color: Colors.primary },
-    scrollContent: { paddingBottom: 100 },
-    tabContent: { padding: 16 },
-    // Overview
-    businessCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
-    businessIcon: { width: 56, height: 56, borderRadius: 14, backgroundColor: '#FFF5F0', justifyContent: 'center', alignItems: 'center' },
-    businessInfo: { flex: 1, marginLeft: 14 },
-    businessName: { fontSize: 18, fontWeight: 'bold', color: Colors.text },
-    tierRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 },
-    tierBadge: { paddingVertical: 3, paddingHorizontal: 10, borderRadius: 8 },
-    tierText: { fontSize: 10, fontWeight: '700', color: 'white' },
-    pendingBadge: { backgroundColor: '#FEF3C7', paddingVertical: 3, paddingHorizontal: 10, borderRadius: 8 },
-    pendingText: { fontSize: 10, fontWeight: '600', color: '#92400E' },
-    statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
-    statCard: { width: '47%', backgroundColor: 'white', borderRadius: 14, padding: 16, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
-    statValue: { fontSize: 18, fontWeight: 'bold', color: Colors.text, marginTop: 8 },
-    statLabel: { fontSize: 12, color: Colors.textDim, marginTop: 4 },
-    sectionTitle: { fontSize: 16, fontWeight: 'bold', color: Colors.text, marginBottom: 12 },
-    actionsRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
-    actionCard: { flex: 1, backgroundColor: 'white', borderRadius: 14, padding: 16, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
-    actionIcon: { width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-    actionLabel: { fontSize: 12, fontWeight: '600', color: Colors.text },
-    locationCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 14, padding: 16 },
-    locationInfo: { marginLeft: 12 },
-    locationLabel: { fontSize: 12, color: Colors.textDim },
-    locationAddress: { fontSize: 14, color: Colors.text, fontWeight: '500', marginTop: 2 },
-    // Listings
-    listingsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-    addButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.primary, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, gap: 4 },
-    addButtonText: { color: 'white', fontWeight: '700', fontSize: 13 },
-    emptyListings: { backgroundColor: 'white', borderRadius: 16, padding: 32, alignItems: 'center' },
-    emptyListingsText: { fontSize: 16, fontWeight: '600', color: Colors.text, marginTop: 12 },
-    emptyListingsSubtext: { fontSize: 12, color: Colors.textDim, textAlign: 'center', marginTop: 4 },
-    listingCard: { backgroundColor: 'white', borderRadius: 14, padding: 16, marginBottom: 12 },
-    listingHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-    listingTitle: { fontSize: 15, fontWeight: '600', color: Colors.text, flex: 1 },
-    statusBadge: { paddingVertical: 3, paddingHorizontal: 8, borderRadius: 8 },
-    activeBadge: { backgroundColor: '#D1FAE5' },
-    inactiveBadge: { backgroundColor: '#F3F4F6' },
-    statusText: { fontSize: 10, fontWeight: '600' },
-    listingMeta: { fontSize: 12, color: Colors.textDim, textTransform: 'capitalize', marginBottom: 10 },
-    listingStats: { flexDirection: 'row', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.border, gap: 16 },
-    listingStat: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    listingStatText: { fontSize: 12, color: Colors.textDim },
-    // Analytics
-    periodSelector: { flexDirection: 'row', backgroundColor: 'white', borderRadius: 12, padding: 4, marginBottom: 16 },
-    periodButton: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
-    periodButtonActive: { backgroundColor: Colors.primary },
-    periodText: { fontSize: 14, fontWeight: '600', color: Colors.textDim },
-    periodTextActive: { color: 'white' },
-    analyticsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
-    analyticsCard: { width: '47%', borderRadius: 14, padding: 16 },
-    analyticsValue: { fontSize: 18, fontWeight: 'bold', color: Colors.text },
-    analyticsLabel: { fontSize: 12, color: Colors.textDim, marginTop: 4 },
-    activeTripsCard: { backgroundColor: 'white', borderRadius: 14, padding: 16, marginBottom: 16 },
-    activeTripsHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-    activeTripsTitle: { fontSize: 14, fontWeight: '600', color: Colors.text },
-    activeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginLeft: 8 },
-    activeTripsStats: { flexDirection: 'row', gap: 20 },
-    activeTripItem: { alignItems: 'center' },
-    activeTripValue: { fontSize: 24, fontWeight: 'bold', color: Colors.text },
-    activeTripLabel: { fontSize: 12, color: Colors.textDim, marginTop: 2 },
-    walletCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 14, padding: 16 },
-    walletInfo: { flex: 1, marginLeft: 12 },
-    walletLabel: { fontSize: 12, color: Colors.textDim },
-    walletValue: { fontSize: 18, fontWeight: 'bold', color: Colors.text, marginTop: 2 },
-    topUpButton: { backgroundColor: Colors.primary, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10 },
-    topUpText: { color: 'white', fontWeight: '700', fontSize: 13 },
-    // Drivers
-    driverCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 14, padding: 14, marginBottom: 10 },
-    driverAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#FFF5F0', justifyContent: 'center', alignItems: 'center' },
-    driverInfo: { flex: 1, marginLeft: 12 },
-    driverName: { fontSize: 15, fontWeight: '600', color: Colors.text },
-    driverMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
-    driverRating: { fontSize: 13, fontWeight: '600', color: '#92400E', marginRight: 8 },
-    driverTrips: { fontSize: 12, color: Colors.textDim },
-    driverStatus: { alignItems: 'center' },
-    onlineIndicator: { width: 10, height: 10, borderRadius: 5, marginBottom: 4 },
-    onlineText: { fontSize: 11, color: Colors.textDim },
-    loadingContainer: { alignItems: 'center', paddingVertical: 40 },
-    emptyContainer: { alignItems: 'center', paddingVertical: 40 },
+    container: { flex: 1, backgroundColor: '#F8F9FA' },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    loadingText: { marginTop: 12, color: '#888' },
+    emptyTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 16, color: '#333' },
+    registerButton: { marginTop: 20, backgroundColor: Colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+    registerButtonText: { color: '#FFF', fontWeight: 'bold' },
+
+    scrollContent: { paddingBottom: 40 },
+
+    // Header (Unified Style)
+    header: {
+        backgroundColor: '#FFF',
+        paddingHorizontal: 24, paddingBottom: 24, paddingTop: 10,
+        borderBottomLeftRadius: 32, borderBottomRightRadius: 32,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05, shadowRadius: 10, elevation: 5,
+        marginBottom: 20
+    },
+    backButton: { marginBottom: 16 },
+    profileRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+    avatarWrapper: { position: 'relative', marginRight: 16 },
+    avatar: { width: 72, height: 72, borderRadius: 16, backgroundColor: '#FFF' }, // Square rounded for Business
+    placeholderAvatar: { borderWidth: 1, borderColor: '#EEE', justifyContent: 'center', alignItems: 'center', backgroundColor: '#F9FAFB' },
+    verifiedBadgeIcon: {
+        position: 'absolute', bottom: -6, right: -6,
+        backgroundColor: '#10B981', borderRadius: 10, padding: 2, borderWidth: 2, borderColor: '#FFF'
+    },
+    profileInfo: { flex: 1 },
+    name: { fontSize: 22, fontWeight: '800', color: '#121212', marginBottom: 4 },
+    tierBadge: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    tierText: { color: '#FFF', fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+
+    // Stats
+    statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8F9FA', borderRadius: 16, padding: 16 },
+    statItem: { alignItems: 'center', flex: 1 },
+    statValue: { fontSize: 18, fontWeight: '800', color: '#121212' },
+    statLabel: { fontSize: 11, color: '#888', marginTop: 2, fontWeight: '500' },
+    statDivider: { width: 1, height: 24, backgroundColor: '#E0E0E0' },
+
+    // Tabs
+    tabsContainer: { paddingHorizontal: 20, marginBottom: 20, flexDirection: 'row', gap: 12 },
+    tab: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
+        backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E7EB'
+    },
+    activeTab: { backgroundColor: '#121212', borderColor: '#121212' },
+    tabText: { fontSize: 13, fontWeight: '600', color: Colors.textDim },
+    activeTabText: { color: '#FFF' },
+
+    // Content
+    section: { paddingHorizontal: 20 },
+    sectionHeader: { fontSize: 16, fontWeight: '700', color: '#121212', marginBottom: 12 },
+
+    grid: { flexDirection: 'row', gap: 12, marginBottom: 20 },
+    gridItem: {
+        flex: 1, backgroundColor: '#FFF', borderRadius: 16, padding: 16,
+        alignItems: 'center', justifyContent: 'center', gap: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05, shadowRadius: 3, elevation: 2
+    },
+    gridLabel: { fontSize: 12, fontWeight: '600', color: '#333' },
+
+    emptyCard: { backgroundColor: '#F1F5F9', borderRadius: 16, padding: 32, alignItems: 'center', justifyContent: 'center' },
+    emptyText: { color: '#94A3B8', marginTop: 8, fontWeight: '500' },
+
+    // Listings Tab specific
+    actionCard: {
+        flexDirection: 'row', alignItems: 'center',
+        backgroundColor: '#FFF', padding: 16, borderRadius: 16, marginBottom: 16,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.03, shadowRadius: 4, elevation: 1
+    },
+    iconBox: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+    actionInfo: { flex: 1 },
+    actionTitle: { fontSize: 16, fontWeight: '700', color: '#121212' },
+    actionSub: { fontSize: 12, color: '#64748B' },
+
+    listingItem: {
+        flexDirection: 'row', alignItems: 'center',
+        backgroundColor: '#FFF', padding: 12, borderRadius: 12, marginBottom: 10,
+        borderWidth: 1, borderColor: '#F1F5F9'
+    },
+    listingImg: { width: 48, height: 48, borderRadius: 8, backgroundColor: '#F1F5F9', marginRight: 12 },
+    listingInfo: { flex: 1 },
+    listingTitle: { fontSize: 14, fontWeight: '600', color: '#333' },
+    listingPrice: { fontSize: 12, color: Colors.primary, fontWeight: '700' },
+
+    // Modal
+    modalOverlay: {
+        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 100
+    },
+    modalCard: {
+        width: '85%', backgroundColor: 'white', borderRadius: 20, padding: 24, elevation: 5
+    },
+    modalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 16 },
+    modalInput: {
+        borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, padding: 12,
+        fontSize: 16, marginBottom: 12
+    },
+    modalActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 },
+    modalCancel: { color: '#64748B', fontWeight: '600', marginRight: 24, fontSize: 16 },
+    modalSave: { backgroundColor: '#16A34A', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+    modalSaveText: { color: 'white', fontWeight: '700' }
 });

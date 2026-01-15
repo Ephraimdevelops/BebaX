@@ -7,31 +7,42 @@ import {
     TextInput,
     TouchableOpacity,
     ActivityIndicator,
-    Linking,
     RefreshControl,
+    Dimensions,
 } from 'react-native';
 import { Colors } from '../../src/constants/Colors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
 import { api } from '../../src/convex/_generated/api';
 import { useRouter } from 'expo-router';
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import { MaterialIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 
-const INDUSTRIES = [
-    { id: 'all', label: 'All', icon: 'business' },
-    { id: 'retail', label: 'Retail', icon: 'store' },
-    { id: 'construction', label: 'Construction', icon: 'build' },
-    { id: 'agriculture', label: 'Agriculture', icon: 'eco' },
-    { id: 'manufacturing', label: 'Manufacturing', icon: 'precision-manufacturing' },
-    { id: 'logistics', label: 'Logistics', icon: 'local-shipping' },
+const { width, height } = Dimensions.get('window');
+
+const CATEGORIES = [
+    { id: 'all', label: 'All', icon: 'apps' },
+    { id: 'logistics', label: 'Logistics', icon: 'boat' },
+    { id: 'retail', label: 'Retail', icon: 'cart' },
+    { id: 'mechanic', label: 'Mechanic', icon: 'build' },
+    { id: 'construction', label: 'Constr.', icon: 'hammer' },
 ];
 
+import { useUser } from '@clerk/clerk-expo';
+
 export default function BusinessScreen() {
+    const { user } = useUser();
     const insets = useSafeAreaInsets();
     const router = useRouter();
+
+    // View Mode State: 'list' | 'map'
+    const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedIndustry, setSelectedIndustry] = useState('all');
+    const [selectedCategory, setSelectedCategory] = useState('all');
     const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -49,11 +60,11 @@ export default function BusinessScreen() {
         })();
     }, []);
 
-    // Fetch nearby businesses with verified+rating ranking
+    // Fetch nearby businesses
     const businesses = useQuery(api.b2b.getNearbyBusinesses, {
         userLat: userLocation?.lat,
         userLng: userLocation?.lng,
-        category: selectedIndustry === 'all' ? undefined : selectedIndustry,
+        category: selectedCategory === 'all' ? undefined : selectedCategory,
     });
 
     const onRefresh = () => {
@@ -61,232 +72,288 @@ export default function BusinessScreen() {
         setTimeout(() => setRefreshing(false), 1000);
     };
 
-    // Filter by search
+    // Filter logic
     const filteredBusinesses = businesses?.filter(biz =>
         searchQuery === '' ||
         biz.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         biz.industry?.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
-    const handleContact = (phone?: string) => {
-        if (phone) {
-            Linking.openURL(`tel:${phone}`);
-        }
-    };
-
     const formatDistance = (distance?: number) => {
         if (!distance || distance > 100000) return '';
-        if (distance < 1) return `${Math.round(distance * 1000)}m away`;
-        return `${distance.toFixed(1)}km away`;
+        if (distance < 1) return `${Math.round(distance * 1000)}m`;
+        return `${distance.toFixed(1)}km`;
     };
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top }]}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color={Colors.text} />
-                </TouchableOpacity>
-                <View style={styles.headerContent}>
-                    <Text style={styles.headerTitle}>Business Directory</Text>
-                    <Text style={styles.headerSubtitle}>
-                        Find logistics partners near you
-                    </Text>
+        <View style={styles.container}>
+            {/* TOP HEADER: Location + Toggle + Profile */}
+            <View style={[styles.topHeader, { paddingTop: insets.top }]}>
+                {/* Location Pill (Left) */}
+                <View style={styles.locationContainer}>
+                    <Text style={styles.locationLabel}>Location</Text>
+                    <View style={styles.addressRow}>
+                        <Ionicons name="location" size={16} color={Colors.primary} />
+                        <Text style={styles.addressText} numberOfLines={1}>Current Location</Text>
+                        <Ionicons name="chevron-down" size={16} color="#0F172A" />
+                    </View>
                 </View>
-                <TouchableOpacity
-                    style={styles.myBizButton}
-                    onPress={() => router.push('/(customer)/my-business')}
-                >
-                    <MaterialIcons name="storefront" size={22} color={Colors.primary} />
-                </TouchableOpacity>
-            </View>
 
-            {/* Search Bar */}
-            <View style={styles.searchContainer}>
-                <MaterialIcons name="search" size={22} color={Colors.textDim} />
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search businesses..."
-                    placeholderTextColor={Colors.textDim}
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                />
-                {searchQuery !== '' && (
-                    <TouchableOpacity onPress={() => setSearchQuery('')}>
-                        <MaterialIcons name="close" size={20} color={Colors.textDim} />
+                {/* View Switcher (Center-Right) */}
+                <View style={styles.viewToggle}>
+                    <TouchableOpacity
+                        style={[styles.toggleBtn, viewMode === 'list' && styles.toggleBtnActive]}
+                        onPress={() => setViewMode('list')}
+                    >
+                        <Text style={[styles.toggleText, viewMode === 'list' && styles.toggleTextActive]}>List</Text>
                     </TouchableOpacity>
-                )}
-            </View>
-
-            {/* Industry Filter */}
-            <View style={styles.filterContainer}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterList}>
-                    {INDUSTRIES.map((ind) => (
-                        <TouchableOpacity
-                            key={ind.id}
-                            style={[
-                                styles.filterChip,
-                                selectedIndustry === ind.id && styles.filterChipActive
-                            ]}
-                            onPress={() => setSelectedIndustry(ind.id)}
-                        >
-                            <MaterialIcons
-                                name={ind.icon as any}
-                                size={16}
-                                color={selectedIndustry === ind.id ? 'white' : Colors.textDim}
-                            />
-                            <Text style={[
-                                styles.filterText,
-                                selectedIndustry === ind.id && styles.filterTextActive
-                            ]}>{ind.label}</Text>
-                        </TouchableOpacity>
-                    ))}
-                </ScrollView>
-            </View>
-
-            <ScrollView
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />
-                }
-            >
-                {/* My Business CTA */}
-                <TouchableOpacity
-                    style={styles.ctaCard}
-                    onPress={() => router.push('/(customer)/my-business')}
-                    activeOpacity={0.9}
-                >
-                    <View style={styles.ctaContent}>
-                        <Text style={styles.ctaTitle}>🏢 Your Business</Text>
-                        <Text style={styles.ctaDescription}>
-                            Register your company to post logistics jobs and find drivers
-                        </Text>
-                        <View style={styles.ctaButton}>
-                            <Text style={styles.ctaButtonText}>Go to Dashboard</Text>
-                            <MaterialIcons name="arrow-forward" size={16} color="#FFF" />
-                        </View>
-                    </View>
-                </TouchableOpacity>
-
-                {/* Stats */}
-                <View style={styles.statsRow}>
-                    <Text style={styles.resultCount}>
-                        {filteredBusinesses?.length || 0} businesses found
-                    </Text>
-                    {userLocation && (
-                        <View style={styles.locationBadge}>
-                            <MaterialIcons name="my-location" size={14} color={Colors.success} />
-                            <Text style={styles.locationText}>Sorted by distance</Text>
-                        </View>
-                    )}
+                    <TouchableOpacity
+                        style={[styles.toggleBtn, viewMode === 'map' && styles.toggleBtnActive]}
+                        onPress={() => setViewMode('map')}
+                    >
+                        <Text style={[styles.toggleText, viewMode === 'map' && styles.toggleTextActive]}>Map</Text>
+                    </TouchableOpacity>
                 </View>
+            </View>
 
-                {/* Loading State */}
-                {businesses === undefined && (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={Colors.primary} />
-                        <Text style={styles.loadingText}>Finding businesses near you...</Text>
-                    </View>
-                )}
+            {/* SEARCH BAR (Floating under header) */}
+            <View style={styles.searchSection}>
+                <View style={styles.searchBar}>
+                    <Ionicons name="search" size={20} color="#94A3B8" />
+                    <TextInput
+                        style={styles.searchInput}
+                        placeholder={viewMode === 'map' ? "Search area..." : "Food, mechanics, logistics..."}
+                        placeholderTextColor="#94A3B8"
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                    />
+                </View>
+            </View>
 
-                {/* Empty State */}
-                {businesses?.length === 0 && (
-                    <View style={styles.emptyContainer}>
-                        <MaterialIcons name="business" size={64} color={Colors.textDim} />
-                        <Text style={styles.emptyTitle}>No Businesses Found</Text>
-                        <Text style={styles.emptyText}>Be the first to register your business!</Text>
-                    </View>
-                )}
+            {/* MAIN CONTENT AREA */}
+            <View style={{ flex: 1 }}>
 
-                {/* Business Cards */}
-                {filteredBusinesses?.map((biz) => (
-                    <View key={biz._id} style={styles.bizCard}>
-                        {/* Header */}
-                        <View style={styles.bizHeader}>
-                            <View style={styles.bizIcon}>
-                                <MaterialIcons name="business" size={28} color={Colors.primary} />
-                            </View>
-                            <View style={styles.bizInfo}>
-                                <View style={styles.nameRow}>
-                                    <Text style={styles.bizName} numberOfLines={1}>{biz.name}</Text>
-                                    {biz.verified && (
-                                        <MaterialIcons name="verified" size={16} color="#10B981" style={{ marginLeft: 4 }} />
-                                    )}
-                                </View>
-                                <View style={styles.metaRow}>
-                                    {!!biz.industry && (
-                                        <Text style={styles.industry}>{biz.industry}</Text>
-                                    )}
-                                    {(biz.distance || 0) > 0 && biz.distance! < 100 && (
-                                        <Text style={styles.distance}>{formatDistance(biz.distance!)}</Text>
-                                    )}
-                                </View>
-                            </View>
-                            {/* Rating Badge */}
-                            {biz.totalTrips > 0 && (
-                                <View style={styles.ratingBadge}>
-                                    <MaterialIcons name="star" size={14} color="#F59E0B" />
-                                    <Text style={styles.ratingText}>{biz.rating.toFixed(1)}</Text>
-                                </View>
-                            )}
+                {/* --- LIST VIEW --- */}
+                {viewMode === 'list' && (
+                    <ScrollView
+                        contentContainerStyle={styles.scrollContent}
+                        showsVerticalScrollIndicator={false}
+                        refreshControl={
+                            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />
+                        }
+                    >
+                        {/* 1. VISUAL CATEGORIES (Uber Style) */}
+                        <View style={styles.categorySection}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+                                {CATEGORIES.map((cat) => (
+                                    <TouchableOpacity
+                                        key={cat.id}
+                                        style={styles.catItem}
+                                        onPress={() => setSelectedCategory(cat.id)}
+                                    >
+                                        <View style={[
+                                            styles.catIconCircle,
+                                            selectedCategory === cat.id && styles.catIconCircleActive
+                                        ]}>
+                                            <Ionicons
+                                                name={cat.icon as any}
+                                                size={24}
+                                                color={selectedCategory === cat.id ? 'white' : '#1E293B'}
+                                            />
+                                        </View>
+                                        <Text style={[
+                                            styles.catLabel,
+                                            selectedCategory === cat.id && styles.catLabelActive
+                                        ]}>{cat.label}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
                         </View>
 
-                        {/* Location */}
-                        {biz.location && (
-                            <View style={styles.locationRow}>
-                                <MaterialIcons name="location-on" size={16} color={Colors.textDim} />
-                                <Text style={styles.locationAddress} numberOfLines={1}>
-                                    {biz.location.address}
-                                </Text>
-                            </View>
-                        )}
+                        {/* 2. FEATURED BANNER (Dynamic based on Role) */}
+                        <View style={styles.featuredSection}>
+                            <Text style={styles.sectionTitle}>
+                                {user?.unsafeMetadata?.role === 'business' ? 'My Business' : 'Partner with BebaX'}
+                            </Text>
 
-                        {/* Stats Row */}
-                        <View style={styles.bizStats}>
-                            <View style={styles.statItem}>
-                                <MaterialIcons name="local-shipping" size={16} color={Colors.primary} />
-                                <Text style={styles.statValue}>{biz.totalTrips}</Text>
-                                <Text style={styles.statLabel}>trips</Text>
-                            </View>
-                            <View style={styles.statItem}>
-                                <MaterialIcons name="workspace-premium" size={16} color={Colors.primary} />
-                                <Text style={styles.statValue}>{biz.tier || 'starter'}</Text>
-                                <Text style={styles.statLabel}>tier</Text>
-                            </View>
-                            {biz.verified && (
-                                <View style={styles.verifiedTag}>
-                                    <MaterialIcons name="verified-user" size={14} color="#10B981" />
-                                    <Text style={styles.verifiedText}>Verified</Text>
-                                </View>
-                            )}
-                        </View>
-
-                        {/* Actions */}
-                        <View style={styles.actionRow}>
-                            {biz.phone && (
+                            {user?.unsafeMetadata?.role === 'business' ? (
+                                // BUSINESS OWNER VIEW
                                 <TouchableOpacity
-                                    style={styles.callButton}
-                                    onPress={() => handleContact(biz.phone)}
+                                    style={styles.heroCard}
+                                    onPress={() => router.push('/(customer)/my-business')} // Restored correct link
+                                    activeOpacity={0.95}
                                 >
-                                    <MaterialIcons name="phone" size={18} color="white" />
-                                    <Text style={styles.callButtonText}>Contact</Text>
+                                    <LinearGradient
+                                        colors={['#F0FDF4', '#DCFCE7'] as any}
+                                        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                                        style={styles.heroGradient}
+                                    >
+                                        <View style={styles.heroContent}>
+                                            <View style={styles.heroBadge}>
+                                                <Text style={styles.heroBadgeText}>MANAGEMENT</Text>
+                                            </View>
+                                            <Text style={styles.heroTitle}>{(user.publicMetadata?.businessName as string) || user.fullName || 'My Business'}</Text>
+                                            <Text style={styles.heroSubtitle}>Manage inventory, orders, and analytics.</Text>
+                                            <View style={styles.heroButton}>
+                                                <Text style={styles.heroBtnText}>Dashboard</Text>
+                                                <Ionicons name="stats-chart" size={16} color="#0F172A" />
+                                            </View>
+                                        </View>
+                                        <Ionicons name="briefcase" size={100} color="rgba(255,255,255,0.05)" style={styles.heroBgIcon} />
+                                    </LinearGradient>
                                 </TouchableOpacity>
-                            )}
-                            <TouchableOpacity
-                                style={styles.viewButton}
-                                onPress={() => {
-                                    // Future: Navigate to business profile
-                                    // router.push(`/(customer)/business-profile?id=${biz._id}`)
-                                }}
-                            >
-                                <MaterialIcons name="visibility" size={18} color={Colors.primary} />
-                                <Text style={styles.viewButtonText}>View</Text>
-                            </TouchableOpacity>
+                            ) : null}
                         </View>
+
+                        {/* 3. HORIZONTAL "RECOMMENDED" (Mockup logic) */}
+                        <View style={styles.horizontalSection}>
+                            <View style={styles.sectionHeader}>
+                                <Text style={styles.sectionTitle}>Recommended for you</Text>
+                                <TouchableOpacity><Text style={styles.seeAllText}>See all</Text></TouchableOpacity>
+                            </View>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
+                                {filteredBusinesses?.slice(0, 3).map((biz, idx) => (
+                                    <TouchableOpacity
+                                        key={`rec-${biz._id}`}
+                                        style={styles.miniCard}
+                                        onPress={() => router.push(`/(customer)/business/${biz._id}`)}
+                                    >
+                                        <View style={[styles.miniCardImage, { backgroundColor: idx % 2 ? '#E0E7FF' : '#FEF3C7' }]}>
+                                            <Ionicons name="storefront" size={32} color={idx % 2 ? '#4338CA' : '#D97706'} />
+                                        </View>
+                                        <View style={styles.miniCardInfo}>
+                                            <Text style={styles.miniCardTitle} numberOfLines={1}>{biz.name}</Text>
+                                            <Text style={styles.miniCardSub}>{biz.industry} • {biz.rating.toFixed(1)} ⭐</Text>
+                                            <Text style={styles.miniCardTime}>15-20 min</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+
+                        {/* 4. ALL BUSINESSES (Vertical) */}
+                        <View style={styles.listSection}>
+                            <Text style={styles.sectionTitle}>Near you</Text>
+                            {filteredBusinesses?.map((biz) => {
+                                // Generate a deterministic gradient color based on name/category
+                                const getGradientColors = (category: string) => {
+                                    switch (category) {
+                                        case 'Logistics': return ['#4F46E5', '#818CF8']; // Indigo
+                                        case 'Food': return ['#EA580C', '#FB923C']; // Orange
+                                        case 'Retail': return ['#059669', '#34D399']; // Emerald
+                                        case 'Mechanic': return ['#475569', '#94A3B8']; // Slate
+                                        default: return ['#2563EB', '#60A5FA']; // Blue
+                                    }
+                                };
+                                const gradColors = getGradientColors(biz.industry);
+
+                                return (
+                                    <TouchableOpacity
+                                        key={biz._id}
+                                        style={styles.richCard}
+                                        onPress={() => router.push(`/(customer)/business/${biz._id}`)}
+                                        activeOpacity={0.95}
+                                    >
+                                        {/* Card Header / Cover Gradient */}
+                                        <LinearGradient
+                                            colors={gradColors}
+                                            start={{ x: 0, y: 0 }}
+                                            end={{ x: 1, y: 1 }}
+                                            style={styles.cardHeaderGradient}
+                                        >
+                                            {/* Category Badge */}
+                                            <View style={styles.categoryBadge}>
+                                                <Text style={styles.categoryText}>{biz.industry}</Text>
+                                            </View>
+
+                                            <View style={styles.cardHeaderOverlay}>
+                                                <View style={styles.cardIconCircle}>
+                                                    <Ionicons name="storefront" size={24} color={gradColors[0]} />
+                                                </View>
+                                            </View>
+                                        </LinearGradient>
+
+                                        {/* Card Content */}
+                                        <View style={styles.cardContent}>
+                                            <View style={styles.cardTopRow}>
+                                                <Text style={styles.cardTitle} numberOfLines={1}>{biz.name}</Text>
+                                                {biz.verified && <Ionicons name="shield-checkmark" size={18} color="#059669" />}
+                                            </View>
+
+                                            {/* Rating & Distance Row */}
+                                            <View style={styles.cardMetaRow}>
+                                                <View style={styles.ratingBox}>
+                                                    <Ionicons name="star" size={12} color="#F59E0B" />
+                                                    <Text style={styles.ratingVal}>{biz.rating.toFixed(1)}</Text>
+                                                    <Text style={styles.ratingCount}>(120+)</Text>
+                                                </View>
+                                                <View style={styles.dotSeparator} />
+                                                {!!biz.distance && (
+                                                    <View style={styles.distanceBox}>
+                                                        <Ionicons name="location-outline" size={12} color="#64748B" />
+                                                        <Text style={styles.distanceVal}>{formatDistance(biz.distance)}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
+
+                                            {/* Description / Highlights */}
+                                            <Text style={styles.cardDesc} numberOfLines={2}>
+                                                Premium services for all your needs.
+                                            </Text>
+
+                                            {/* Action Buttons */}
+                                            <View style={styles.cardActions}>
+                                                <TouchableOpacity style={styles.actionBtn}>
+                                                    <Ionicons name="call-outline" size={16} color={Colors.primary} />
+                                                    <Text style={styles.actionBtnText}>Call</Text>
+                                                </TouchableOpacity>
+                                                <TouchableOpacity style={[styles.actionBtn, styles.actionBtnPrimary]}>
+                                                    <Ionicons name="navigate-outline" size={16} color="#FFF" />
+                                                    <Text style={[styles.actionBtnText, { color: '#FFF' }]}>Directions</Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+
+                        <View style={{ height: 100 }} />
+                    </ScrollView>
+                )}
+
+                {/* --- MAP VIEW --- */}
+                {viewMode === 'map' && (
+                    <View style={styles.mapContainer}>
+                        <MapView
+                            style={styles.map}
+                            initialRegion={{
+                                latitude: userLocation?.lat || -6.7924,
+                                longitude: userLocation?.lng || 39.2083,
+                                latitudeDelta: 0.05,
+                                longitudeDelta: 0.05,
+                            }}
+                            showsUserLocation
+                        >
+                            {filteredBusinesses?.map((biz) => (
+                                <Marker
+                                    key={biz._id}
+                                    coordinate={{
+                                        latitude: biz.location?.lat || 0,
+                                        longitude: biz.location?.lng || 0
+                                    }}
+                                    title={biz.name}
+                                    description={biz.industry}
+                                >
+                                    <View style={styles.mapMarker}>
+                                        <Ionicons name="storefront" size={16} color="white" />
+                                    </View>
+                                </Marker>
+                            ))}
+                        </MapView>
                     </View>
-                ))}
-            </ScrollView>
+                )}
+            </View>
         </View>
     );
 }
@@ -294,321 +361,442 @@ export default function BusinessScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Colors.background,
+        backgroundColor: '#FFFFFF', // High-end white background
     },
-    header: {
+
+    // --- TOP HEADER ---
+    topHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingBottom: 12,
         backgroundColor: 'white',
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.border,
+        zIndex: 10,
     },
-    backButton: {
-        padding: 8,
-    },
-    headerContent: {
+    locationContainer: {
         flex: 1,
-        marginLeft: 8,
     },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: Colors.text,
-    },
-    headerSubtitle: {
+    locationLabel: {
         fontSize: 12,
-        color: Colors.textDim,
-        marginTop: 2,
+        color: '#94A3B8',
+        fontWeight: '600',
+        marginBottom: 2,
     },
-    myBizButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: '#FFF5F0',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    searchContainer: {
+    addressRow: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 6,
+    },
+    addressText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#0F172A',
+        maxWidth: '80%',
+    },
+    viewToggle: {
+        flexDirection: 'row',
+        backgroundColor: '#F1F5F9',
+        borderRadius: 20,
+        padding: 4,
+        marginLeft: 16,
+    },
+    toggleBtn: {
+        paddingVertical: 6,
+        paddingHorizontal: 16,
+        borderRadius: 16,
+    },
+    toggleBtnActive: {
         backgroundColor: 'white',
-        marginHorizontal: 16,
-        marginTop: 16,
-        paddingHorizontal: 14,
-        height: 48,
-        borderRadius: 12,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    toggleText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    toggleTextActive: {
+        color: '#0F172A',
+    },
+
+    // --- SEARCH BAR ---
+    searchSection: {
+        paddingHorizontal: 20,
+        paddingBottom: 10,
+        backgroundColor: 'white',
+        zIndex: 9,
+    },
+    searchBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F8FAFC',
+        paddingHorizontal: 16,
+        height: 50,
+        borderRadius: 14,
         borderWidth: 1,
-        borderColor: Colors.border,
+        borderColor: '#E2E8F0',
     },
     searchInput: {
         flex: 1,
         marginLeft: 10,
-        fontSize: 15,
-        color: Colors.text,
+        fontSize: 16,
+        fontWeight: '500',
+        color: '#0F172A',
     },
-    filterContainer: {
+
+    // --- CATEGORIES (UBER STYLE) ---
+    categorySection: {
+        paddingTop: 16,
+        paddingBottom: 8,
+    },
+    categoryList: {
+        paddingHorizontal: 20,
+        gap: 16,
+    },
+    catItem: {
+        alignItems: 'center',
+        width: 70,
+    },
+    catIconCircle: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        backgroundColor: '#F1F5F9', // Default grey
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    catIconCircleActive: {
+        backgroundColor: '#0F172A', // Active black
+    },
+    catLabel: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    catLabelActive: {
+        color: '#0F172A',
+        fontWeight: '700',
+    },
+
+    // --- HERO SECTION ---
+    featuredSection: {
+        paddingHorizontal: 20,
+        paddingVertical: 24,
+    },
+    heroCard: {
+        height: 180,
+        borderRadius: 24,
+        overflow: 'hidden',
         marginTop: 12,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.15,
+        shadowRadius: 20,
+        elevation: 10,
     },
-    filterList: {
-        paddingHorizontal: 16,
-    },
-    filterChip: {
+    heroGradient: {
+        flex: 1,
+        padding: 24,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        backgroundColor: 'white',
-        borderRadius: 20,
-        marginRight: 8,
-        borderWidth: 1,
-        borderColor: Colors.border,
-        gap: 4,
     },
-    filterChipActive: {
-        backgroundColor: Colors.primary,
-        borderColor: Colors.primary,
+    heroContent: {
+        flex: 1,
+        zIndex: 2,
     },
-    filterText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: Colors.textDim,
+    heroBadge: {
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+        alignSelf: 'flex-start',
+        marginBottom: 12,
     },
-    filterTextActive: {
-        color: 'white',
-    },
-    scrollContent: {
-        padding: 16,
-        paddingBottom: 100,
-    },
-    ctaCard: {
-        backgroundColor: Colors.text,
-        borderRadius: 20,
-        padding: 20,
-        marginBottom: 20,
-    },
-    ctaContent: {},
-    ctaTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
+    heroBadgeText: { color: 'white', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+    heroTitle: {
+        fontSize: 24,
+        fontWeight: '800',
         color: 'white',
         marginBottom: 6,
     },
-    ctaDescription: {
-        fontSize: 13,
-        color: '#E5E7EB',
-        marginBottom: 14,
-        lineHeight: 18,
+    heroSubtitle: {
+        fontSize: 14,
+        color: 'rgba(255,255,255,0.8)',
+        marginBottom: 20,
+        lineHeight: 20,
     },
-    ctaButton: {
+    heroButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: Colors.primary,
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderRadius: 12,
-        alignSelf: 'flex-start',
         gap: 6,
+        backgroundColor: 'white',
+        paddingVertical: 10,
+        paddingHorizontal: 20,
+        borderRadius: 20,
+        alignSelf: 'flex-start',
     },
-    ctaButtonText: {
-        color: 'white',
+    heroBtnText: {
+        color: '#0F172A',
         fontWeight: '700',
-        fontSize: 14,
+        fontSize: 13,
     },
-    statsRow: {
+    heroBgIcon: {
+        position: 'absolute',
+        right: -20,
+        bottom: -20,
+        transform: [{ rotate: '-15deg' }],
+    },
+
+    // --- HORIZONTAL SECTIONS ---
+    horizontalSection: {
+        marginBottom: 30,
+    },
+    sectionHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
+        paddingHorizontal: 20,
         marginBottom: 16,
     },
-    resultCount: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: Colors.text,
-    },
-    locationBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    locationText: {
-        fontSize: 12,
-        color: Colors.success,
-    },
-    loadingContainer: {
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    loadingText: {
-        marginTop: 12,
-        color: Colors.textDim,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    emptyTitle: {
+    sectionTitle: {
         fontSize: 18,
-        fontWeight: 'bold',
-        color: Colors.text,
-        marginTop: 16,
+        fontWeight: '700',
+        color: '#0F172A',
     },
-    emptyText: {
-        color: Colors.textDim,
-        marginTop: 8,
+    seeAllText: {
+        fontSize: 14,
+        color: Colors.primary,
+        fontWeight: '600',
     },
-    bizCard: {
+    horizontalList: {
+        paddingHorizontal: 20,
+        gap: 16,
+    },
+    miniCard: {
+        width: 200,
+        marginRight: 4,
+    },
+    miniCardImage: {
+        height: 120,
+        borderRadius: 16,
+        backgroundColor: '#E2E8F0',
+        marginBottom: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    miniCardInfo: {},
+    miniCardTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+    miniCardSub: { fontSize: 13, color: '#64748B', fontWeight: '500', marginBottom: 2 },
+    miniCardTime: { fontSize: 12, color: '#94A3B8', fontWeight: '400' },
+
+    // --- VERTICAL LIST (NEARBY) ---
+    listSection: {
+        paddingHorizontal: 20,
+        paddingBottom: 40,
+    },
+    standardCard: {
         backgroundColor: 'white',
         borderRadius: 16,
         padding: 16,
-        marginBottom: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-        elevation: 2,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#F1F5F9', // Very subtle border
+        // shadowColor: "#000",
+        // shadowOffset: { width: 0, height: 2 },
+        // shadowOpacity: 0.03,
+        // shadowRadius: 8,
     },
-    bizHeader: {
+    stdCardRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 10,
-    },
-    bizIcon: {
-        width: 52,
-        height: 52,
-        borderRadius: 14,
-        backgroundColor: '#FFF5F0',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    bizInfo: {
-        flex: 1,
-        marginLeft: 12,
-    },
-    nameRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    bizName: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: Colors.text,
-        flex: 1,
-    },
-    metaRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 4,
-        gap: 8,
-    },
-    industry: {
-        fontSize: 12,
-        color: Colors.textDim,
-        textTransform: 'capitalize',
-    },
-    distance: {
-        fontSize: 12,
-        color: Colors.primary,
-        fontWeight: '600',
-    },
-    ratingBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FEF3C7',
-        paddingVertical: 4,
-        paddingHorizontal: 8,
-        borderRadius: 8,
-        gap: 4,
-    },
-    ratingText: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: '#92400E',
-    },
-    locationRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 10,
-        gap: 4,
-    },
-    locationAddress: {
-        flex: 1,
-        fontSize: 13,
-        color: Colors.textDim,
-    },
-    bizStats: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 10,
-        borderTopWidth: 1,
-        borderTopColor: Colors.border,
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.border,
-        marginBottom: 12,
         gap: 16,
     },
-    statItem: {
-        flexDirection: 'row',
+    stdIconBox: {
+        width: 50,
+        height: 50,
+        borderRadius: 12,
+        backgroundColor: '#F8FAFC',
+        justifyContent: 'center',
         alignItems: 'center',
-        gap: 4,
     },
-    statValue: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: Colors.text,
+    stdContent: {
+        flex: 1,
     },
-    statLabel: {
-        fontSize: 12,
-        color: Colors.textDim,
+    stdTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
+    stdSub: { fontSize: 14, color: '#64748B', marginVertical: 4 },
+    stdRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    stdRatingText: { fontSize: 12, fontWeight: '600', color: '#F59E0B' },
+    stdAction: {
+        justifyContent: 'center',
     },
-    verifiedTag: {
+
+    // --- MAP VIEW ---
+    mapContainer: {
+        flex: 1,
+        backgroundColor: '#E2E8F0',
+    },
+    map: {
+        ...StyleSheet.absoluteFillObject,
+    },
+    mapMarker: {
+        backgroundColor: Colors.primary,
+        padding: 6,
+        borderRadius: 20,
+        borderWidth: 2,
+        borderColor: 'white',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 4,
+    },
+
+    // --- RICH LIST CARD (UBER STYLE) ---
+    richCard: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        marginBottom: 20,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: '#F1F5F9',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 3,
+    },
+    cardHeaderGradient: {
+        height: 120, // Taller header
+        padding: 16,
+        justifyContent: 'space-between',
         flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#D1FAE5',
-        paddingVertical: 4,
+    },
+    categoryBadge: {
+        backgroundColor: 'rgba(0,0,0,0.3)',
         paddingHorizontal: 8,
+        paddingVertical: 4,
         borderRadius: 8,
-        gap: 4,
-        marginLeft: 'auto',
+        alignSelf: 'flex-start',
     },
-    verifiedText: {
+    categoryText: {
+        color: 'white',
         fontSize: 11,
-        fontWeight: '600',
-        color: '#065F46',
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
     },
-    actionRow: {
+    cardHeaderOverlay: {
+        alignSelf: 'flex-start',
+    },
+    cardIconCircle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'white',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+    },
+    cardContent: {
+        padding: 16,
+    },
+    cardTopRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    cardTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#0F172A',
+        flex: 1,
+        marginRight: 8,
+    },
+    cardMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    ratingBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFBEB',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
+        gap: 4,
+    },
+    ratingVal: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#B45309',
+    },
+    ratingCount: {
+        fontSize: 12,
+        color: '#B45309',
+        opacity: 0.8,
+    },
+    dotSeparator: {
+        width: 3,
+        height: 3,
+        borderRadius: 1.5,
+        backgroundColor: '#CBD5E1',
+        marginHorizontal: 8,
+    },
+    distanceBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    distanceVal: {
+        fontSize: 13,
+        color: '#64748B',
+    },
+    cardDesc: {
+        fontSize: 14,
+        color: '#64748B',
+        lineHeight: 20,
+        marginBottom: 16,
+    },
+    cardActions: {
         flexDirection: 'row',
         gap: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#F1F5F9',
+        paddingTop: 12,
     },
-    callButton: {
+    actionBtn: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: Colors.success,
-        paddingVertical: 12,
-        borderRadius: 12,
+        paddingVertical: 10,
+        borderRadius: 10,
+        backgroundColor: '#F8FAFC',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
         gap: 6,
     },
-    callButtonText: {
-        color: 'white',
-        fontWeight: '700',
-        fontSize: 14,
+    actionBtnPrimary: {
+        backgroundColor: Colors.primary,
+        borderColor: Colors.primary,
     },
-    viewButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FFF5F0',
-        paddingVertical: 12,
-        borderRadius: 12,
-        gap: 6,
+    actionBtnText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#0F172A',
     },
-    viewButtonText: {
-        color: Colors.primary,
-        fontWeight: '700',
-        fontSize: 14,
+
+    scrollContent: {
+        paddingBottom: 40,
     },
 });

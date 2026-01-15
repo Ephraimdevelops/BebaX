@@ -74,8 +74,10 @@ export default function SettingsScreen() {
                     text: "Sign Out",
                     style: "destructive",
                     onPress: async () => {
+                        // Clear cached session to prevent stale data in routing
+                        await AsyncStorage.removeItem('user_session');
                         await signOut();
-                        router.replace('/(auth)/welcome');
+                        router.replace('/(customer)/map');
                     }
                 }
             ]

@@ -13,7 +13,7 @@ export default function DriverRegistration() {
     const { toast } = useToast();
     const registerDriver = useMutation(api.drivers.register);
     const uploadDocuments = useMutation(api.fileUpload.uploadDriverDocuments);
-    const createVehicle = useMutation(api.vehicles.create);
+    // createVehicle not needed - vehicle info handled by registerDriver
 
     const [step, setStep] = useState(1);
     const [isSubmitting, setIsSubmitting] = useState(false);

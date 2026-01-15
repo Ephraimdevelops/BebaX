@@ -1,5 +1,71 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { isValidRole } from "./permissions"; // RBAC Validation
+
+// ===== CREATE PROFILE =====
+// Called from role-selection screen to create user profile after auth
+export const createProfile = mutation({
+    args: {
+        role: v.union(v.literal("customer"), v.literal("driver")),
+        name: v.string(),
+        phone: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        // Check if profile already exists
+        const existingProfile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (existingProfile) {
+            // Update existing profile with new role
+            await ctx.db.patch(existingProfile._id, {
+                role: args.role,
+                name: args.name || existingProfile.name,
+                phone: args.phone || existingProfile.phone,
+            });
+            return existingProfile._id;
+        }
+
+        // Create new profile
+        const profileId = await ctx.db.insert("userProfiles", {
+            clerkId: identity.subject,
+            name: args.name || "User",
+            email: identity.email || "",
+            role: args.role,
+            phone: args.phone || "",
+            rating: 5.0,
+            totalRides: 0,
+            created_at: new Date().toISOString(),
+        });
+
+        // If driver role, also create driver record
+        if (args.role === "driver") {
+            await ctx.db.insert("drivers", {
+                clerkId: identity.subject,
+                license_number: "PENDING",
+                nida_number: "PENDING",
+                verified: false,
+                is_online: false,
+                vehicle_type: "boda",
+                rating: 5.0,
+                total_trips: 0,
+                total_earnings: 0,
+                commission_rate: 0.1,
+                wallet_balance: 0,
+                wallet_locked: false,
+                created_at: new Date().toISOString(),
+            });
+        }
+
+        return profileId;
+    },
+});
 
 // Validation helpers
 const validatePhone = (phone: string) => {
@@ -41,7 +107,43 @@ export const syncUser = mutation({
             .first();
 
         if (existingProfile) {
-            // Profile exists - return it
+            // REPAIR LOGIC: Check if Driver role but missing Driver Record
+            if (existingProfile.role === "driver") {
+                const driverRecord = await ctx.db
+                    .query("drivers")
+                    .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+                    .first();
+
+                if (!driverRecord) {
+                    // Backfill missing driver record for legacy user
+                    await ctx.db.insert("drivers", {
+                        clerkId: identity.subject,
+                        license_number: "PENDING_UPDATE",
+                        nida_number: "pending",
+                        verified: false,
+                        is_online: false,
+                        vehicle_type: "boda", // Default fallback
+                        rating: existingProfile.rating || 5.0,
+                        total_trips: existingProfile.totalRides || 0,
+                        total_earnings: 0,
+                        commission_rate: 0.1,
+                        wallet_balance: 0,
+                        wallet_locked: false,
+                        created_at: new Date().toISOString(),
+                    });
+
+                    // Also create vehicle if missing
+                    await ctx.db.insert("vehicles", {
+                        driver_clerk_id: identity.subject,
+                        type: "tricycle", // standard fallback
+                        plate_number: "UPDATE_NEEDED",
+                        capacity_kg: 500,
+                        base_fare: 2000,
+                        per_km_rate: 1000,
+                        created_at: new Date().toISOString(),
+                    });
+                }
+            }
             return existingProfile;
         }
 
@@ -50,7 +152,8 @@ export const syncUser = mutation({
             clerkId: identity.subject,
             name: identity.name || identity.givenName || "User",
             email: identity.email || "",
-            role: "customer" as const, // Default to customer
+            // DEV SHORTCUT: Auto-admin for specific email domain
+            role: (identity.email?.endsWith("@bebax-admin.com") ? "admin" : "customer") as "customer" | "driver" | "admin" | "fleet_owner",
             phone: "", // Will be captured later via PhoneCaptureModal or profile edit
             rating: 5.0,
             totalRides: 0,
@@ -410,5 +513,52 @@ export const getMyself = query({
         }
 
         return { profile, driver, org };
+    },
+});
+
+
+// LIGHTWEIGHT SESSION CHECK (Low Latency)
+// Returns ONLY vital signs, no bulky json.
+export const getSessionContext = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const profile = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!profile) return null;
+
+        // Validating Role Integrity (Self-Healing)
+        if (!isValidRole(profile.role)) {
+            // Log error or fallback? For now just return as customer
+            console.error(`Invalid role detected for ${profile._id}: ${profile.role}`);
+        }
+
+        // Fetch Org Status if exists
+        let orgStatus: string | null = null;
+        if (profile.orgId) {
+            // Explicitly cast to unknown first to avoid overlap error, then to expected layout
+            const org = await ctx.db.get(profile.orgId as any) as unknown as { status?: string } | null;
+            orgStatus = org?.status || 'pending';
+        }
+
+        return {
+            _id: profile._id,
+            role: profile.role,
+            name: profile.name,
+            // Business Fields (Source of Truth for Routing)
+            orgId: profile.orgId || null,
+            orgRole: profile.orgRole || null,
+            orgStatus: orgStatus,
+            // Status flags for routing
+            is_business_setup: !!profile.orgId,
+            onboarding_complete: !!profile.phone,
+        };
     },
 });

@@ -113,19 +113,33 @@ export default function DocumentsScreen() {
             </View>
 
             <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+                {/* Progress Bar */}
+                <View style={styles.progressContainer}>
+                    <View style={styles.progressBarBg}>
+                        <View style={[styles.progressBarFill, { width: `${(completedCount / DOCUMENT_TYPES.length) * 100}%` }]} />
+                    </View>
+                    <Text style={styles.progressText}>{Math.round((completedCount / DOCUMENT_TYPES.length) * 100)}% Complete</Text>
+                </View>
+
                 {/* Status Banner */}
                 <View style={[styles.statusBanner, isVerified ? styles.verifiedBanner : styles.pendingBanner]}>
                     {isVerified ? (
                         <>
                             <ShieldCheck size={24} color="white" />
-                            <Text style={styles.statusText}>All documents verified</Text>
+                            <View>
+                                <Text style={styles.statusTitle}>Verified Driver</Text>
+                                <Text style={styles.statusText}>You are fully approved to drive.</Text>
+                            </View>
                         </>
                     ) : (
                         <>
                             <Clock size={24} color="white" />
-                            <Text style={styles.statusText}>
-                                {allComplete ? 'Pending Admin Review' : `${completedCount}/${DOCUMENT_TYPES.length} Documents Uploaded`}
-                            </Text>
+                            <View>
+                                <Text style={styles.statusTitle}>Verification Pending</Text>
+                                <Text style={styles.statusText}>
+                                    {allComplete ? 'Under admin review (24h)' : 'Upload all documents to verify'}
+                                </Text>
+                            </View>
                         </>
                     )}
                 </View>
@@ -138,17 +152,19 @@ export default function DocumentsScreen() {
                         const docUrl = documentUrls?.[doc.key as keyof typeof documentUrls];
 
                         return (
-                            <View key={doc.key} style={styles.documentCard}>
+                            <View key={doc.key} style={[styles.documentCard, status === 'uploaded' && styles.cardUploaded]}>
                                 <View style={styles.docHeader}>
-                                    <Text style={styles.docIcon}>{doc.icon}</Text>
+                                    <View style={[styles.iconBox, status === 'uploaded' ? styles.iconBoxSuccess : styles.iconBoxPending]}>
+                                        <Text style={{ fontSize: 20 }}>{doc.icon}</Text>
+                                    </View>
                                     <View style={styles.docInfo}>
                                         <Text style={styles.docLabel}>{doc.label}</Text>
                                         <Text style={styles.docDescription}>{doc.description}</Text>
                                     </View>
-                                    {status === 'uploaded' ? (
-                                        <CheckCircle size={24} color={Colors.success} />
-                                    ) : (
-                                        <AlertCircle size={24} color={Colors.warning} />
+                                    {status === 'uploaded' && (
+                                        <View style={styles.checkBadge}>
+                                            <CheckCircle size={14} color="white" />
+                                        </View>
                                     )}
                                 </View>
 
@@ -160,20 +176,22 @@ export default function DocumentsScreen() {
                                             style={styles.docPreview}
                                             resizeMode="cover"
                                         />
-                                        <TouchableOpacity
-                                            style={styles.reuploadButton}
-                                            onPress={() => handleUploadDocument(doc.key)}
-                                            disabled={isUploading}
-                                        >
-                                            {isUploading ? (
-                                                <ActivityIndicator size="small" color={Colors.primary} />
-                                            ) : (
-                                                <>
-                                                    <Camera size={16} color={Colors.primary} />
-                                                    <Text style={styles.reuploadText}>Re-upload</Text>
-                                                </>
-                                            )}
-                                        </TouchableOpacity>
+                                        <View style={styles.previewOverlay}>
+                                            <TouchableOpacity
+                                                style={styles.editDocBtn}
+                                                onPress={() => handleUploadDocument(doc.key)}
+                                                disabled={isUploading}
+                                            >
+                                                {isUploading ? (
+                                                    <ActivityIndicator size="small" color="white" />
+                                                ) : (
+                                                    <>
+                                                        <Camera size={14} color="white" />
+                                                        <Text style={styles.editDocText}>Change</Text>
+                                                    </>
+                                                )}
+                                            </TouchableOpacity>
+                                        </View>
                                     </View>
                                 ) : (
                                     <TouchableOpacity
@@ -182,11 +200,11 @@ export default function DocumentsScreen() {
                                         disabled={isUploading}
                                     >
                                         {isUploading ? (
-                                            <ActivityIndicator size="small" color="white" />
+                                            <ActivityIndicator size="small" color={Colors.primary} />
                                         ) : (
                                             <>
-                                                <Upload size={20} color="white" />
-                                                <Text style={styles.uploadText}>Upload Document</Text>
+                                                <Upload size={18} color={Colors.primary} />
+                                                <Text style={styles.uploadText}>Tap to Upload</Text>
                                             </>
                                         )}
                                     </TouchableOpacity>
@@ -198,9 +216,9 @@ export default function DocumentsScreen() {
 
                 {/* Info Note */}
                 <View style={styles.infoNote}>
-                    <FileText size={20} color={Colors.textDim} />
+                    <ShieldCheck size={20} color={Colors.textDim} />
                     <Text style={styles.infoText}>
-                        All documents are securely stored and reviewed by our verification team within 24-48 hours.
+                        Your documents are encrypted and only shared with verified authorities when required.
                     </Text>
                 </View>
             </ScrollView>
@@ -209,147 +227,50 @@ export default function DocumentsScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F8F9FA',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: 16,
-        backgroundColor: 'white',
-        borderBottomWidth: 1,
-        borderBottomColor: '#E0E0E0',
-    },
-    backButton: {
-        width: 44,
-        height: 44,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: Colors.text,
-    },
-    content: {
-        flex: 1,
-        padding: 16,
-    },
-    statusBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 16,
-        borderRadius: 16,
-        gap: 12,
-        marginBottom: 20,
-    },
-    verifiedBanner: {
-        backgroundColor: Colors.success,
-    },
-    pendingBanner: {
-        backgroundColor: Colors.warning,
-    },
-    statusText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    documentList: {
-        gap: 16,
-    },
-    documentCard: {
-        backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    docHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    docIcon: {
-        fontSize: 32,
-        marginRight: 12,
-    },
-    docInfo: {
-        flex: 1,
-    },
-    docLabel: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: Colors.text,
-    },
-    docDescription: {
-        fontSize: 13,
-        color: Colors.textDim,
-        marginTop: 2,
-    },
-    previewContainer: {
-        position: 'relative',
-    },
-    docPreview: {
-        width: '100%',
-        height: 150,
-        borderRadius: 12,
-        backgroundColor: '#F0F0F0',
-    },
-    reuploadButton: {
-        position: 'absolute',
-        bottom: 8,
-        right: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'white',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 20,
-        gap: 6,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    reuploadText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: Colors.primary,
-    },
-    uploadButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: Colors.primary,
-        paddingVertical: 14,
-        borderRadius: 12,
-        gap: 10,
-    },
-    uploadText: {
-        color: 'white',
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    infoNote: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        padding: 16,
-        backgroundColor: '#F0F0F0',
-        borderRadius: 12,
-        marginTop: 20,
-        marginBottom: 40,
-        gap: 12,
-    },
-    infoText: {
-        flex: 1,
-        fontSize: 13,
-        color: Colors.textDim,
-        lineHeight: 18,
-    },
+    container: { flex: 1, backgroundColor: '#F9FAFB' },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+    backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 20, backgroundColor: '#F3F4F6' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937' },
+    content: { flex: 1, padding: 20 },
+
+    // Progress
+    progressContainer: { marginBottom: 24 },
+    progressBarBg: { height: 8, backgroundColor: '#E5E7EB', borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
+    progressBarFill: { height: '100%', backgroundColor: Colors.success, borderRadius: 4 },
+    progressText: { fontSize: 13, color: '#6B7280', fontWeight: '600', alignSelf: 'flex-end' },
+
+    // Banner
+    statusBanner: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 16, gap: 12, marginBottom: 24, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 4 }, shadowRadius: 8, elevation: 4 },
+    verifiedBanner: { backgroundColor: Colors.success },
+    pendingBanner: { backgroundColor: '#F59E0B' },
+    statusTitle: { color: 'white', fontSize: 16, fontWeight: '800', marginBottom: 2 },
+    statusText: { color: 'rgba(255,255,255,0.9)', fontSize: 13 },
+
+    // List
+    documentList: { gap: 16 },
+    documentCard: { backgroundColor: 'white', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#F3F4F6', shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 4, elevation: 1 },
+    cardUploaded: { borderColor: Colors.success },
+
+    docHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+    iconBox: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+    iconBoxSuccess: { backgroundColor: '#ECFDF5' },
+    iconBoxPending: { backgroundColor: '#FFFBEB' },
+    docInfo: { flex: 1, marginLeft: 12 },
+    docLabel: { fontSize: 16, fontWeight: '700', color: '#111827' },
+    docDescription: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+    checkBadge: { backgroundColor: Colors.success, borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
+
+    // Preview
+    previewContainer: { borderRadius: 12, overflow: 'hidden', height: 140 },
+    docPreview: { width: '100%', height: '100%' },
+    previewOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, flexDirection: 'row', justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' },
+    editDocBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, gap: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
+    editDocText: { color: 'white', fontSize: 11, fontWeight: '700' },
+
+    // Upload Btn
+    uploadButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFF6FF', paddingVertical: 12, borderRadius: 12, gap: 8, borderStyle: 'dashed', borderWidth: 1, borderColor: Colors.primary },
+    uploadText: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
+
+    infoNote: { flexDirection: 'row', alignItems: 'center', marginTop: 24, padding: 16, backgroundColor: '#F3F4F6', borderRadius: 12, gap: 12, paddingBottom: 40 },
+    infoText: { flex: 1, fontSize: 12, color: '#6B7280', lineHeight: 18 },
 });

@@ -84,11 +84,16 @@ export const SemiIcon = ({ color = DEEP_ASPHALT, width = 40, height = 40 }: Icon
 export const getVehicleIcon = (id: string) => {
     switch (id) {
         case 'boda': return BodaIcon;
-        case 'bajaj': return BajajIcon;
+        case 'toyo': return BajajIcon; // Closest match (3-wheeler)
+        case 'bajaj': return BajajIcon; // Legacy
         case 'kirikuu': return KirikuuIcon;
+        case 'pickup': return PickupDIcon;
         case 'pickup_s': return PickupSIcon;
         case 'pickup_d': return PickupDIcon;
-        case 'semi': return SemiIcon;
+        case 'canter': return TruckIcon;
+        case 'fuso': return TruckIcon; // Heavy truck
+        case 'trailer': return SemiIcon;
+        case 'semi': return SemiIcon; // Legacy
         default: return TruckIcon;
     }
 };

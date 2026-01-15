@@ -67,6 +67,9 @@ export default function DriverSignup() {
             if (completeSignUp.status === 'complete') {
                 await setSignUpActive({ session: completeSignUp.createdSessionId });
 
+                // Wait for Clerk token to propagate to Convex
+                await new Promise(resolve => setTimeout(resolve, 1500));
+
                 // 1. Sync user profile with driver role
                 try {
                     await syncDriverProfile({
@@ -119,6 +122,9 @@ export default function DriverSignup() {
             const completeSignUp = await signUp.attemptEmailAddressVerification({ code });
             if (completeSignUp.status === 'complete') {
                 await setSignUpActive({ session: completeSignUp.createdSessionId });
+
+                // Wait for Clerk token to propagate to Convex
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
                 // 1. Sync user profile with driver role
                 try {

@@ -173,3 +173,69 @@ export const removeDriver = mutation({
         await ctx.db.patch(driver._id, { fleet_id: undefined });
     },
 });
+
+// Get rides for my fleet
+export const getFleetRides = query({
+    args: { fleet_id: v.id("fleets") },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return [];
+        }
+
+        // Verify ownership
+        const fleet = await ctx.db.get(args.fleet_id);
+        if (!fleet || fleet.owner_id !== identity.subject) {
+            throw new Error("Not authorized");
+        }
+
+        // Get fleet drivers
+        const drivers = await ctx.db
+            .query("drivers")
+            .withIndex("by_fleet_id", (q) => q.eq("fleet_id", args.fleet_id))
+            .collect();
+
+        const driverIds = drivers.map(d => d.clerkId);
+
+        if (driverIds.length === 0) {
+            return [];
+        }
+
+        // Fetch rides driven by these drivers
+        // Note: Needs efficient index. For now, doing parallel fetches + filtering.
+        // In prod, would use proper relationship index or aggregate table.
+        // We'll fetch robustly:
+
+        const allRides = await ctx.db
+            .query("rides")
+            .withIndex("by_status", (q) => q.eq("status", "completed"))
+            .order("desc")
+            .take(100); // Limit to recent 100 trips for dashboard
+
+        const fleetRides = allRides.filter(ride => ride.driver_clerk_id && driverIds.includes(ride.driver_clerk_id));
+
+        // Enrich with driver info
+        const ridesWithDetails = await Promise.all(
+            fleetRides.map(async (ride) => {
+                const driver = drivers.find(d => d.clerkId === ride.driver_clerk_id);
+                // Get driver name from profile
+                let driverName = "Unknown Driver";
+                if (driver) {
+                    const profile = await ctx.db
+                        .query("userProfiles")
+                        .withIndex("by_clerk_id", (q) => q.eq("clerkId", driver.clerkId))
+                        .unique();
+                    driverName = profile?.name || "Unknown Driver";
+                }
+
+                return {
+                    ...ride,
+                    driver_name: driverName,
+                    vehicle_type: driver?.vehicle_type
+                };
+            })
+        );
+
+        return ridesWithDetails;
+    },
+});

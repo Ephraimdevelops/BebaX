@@ -1,22 +1,15 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, Alert, Switch, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, Alert, Switch, ActivityIndicator, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convex/_generated/api';
 import { Colors } from '../../src/constants/Colors';
-import { ShieldCheck, FileText, Settings, Award, AlertCircle, Camera, LogOut, Globe, Bell, Phone } from 'lucide-react-native';
+import { ShieldCheck, FileText, Settings, Award, AlertCircle, Camera, LogOut, ChevronRight, Clock, Star, MapPin, CreditCard, HelpCircle, Truck, User } from 'lucide-react-native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 
-// Asset Map
-const vehicleAssets: Record<string, any> = {
-    'tricycle': require('../../assets/images/bajaji.png'),
-    'van': require('../../assets/images/car.png'),
-    'truck': require('../../assets/images/truck.png'),
-    'semitrailer': require('../../assets/images/truck.png'),
-    'boda': require('../../assets/images/boda.png'),
-};
+const { width } = Dimensions.get('window');
 
 export default function ProfileScreen() {
     const { signOut } = useAuth();
@@ -24,33 +17,13 @@ export default function ProfileScreen() {
     // @ts-ignore
     const profile = useQuery(api.drivers.getDriverProfile);
     const generateUploadUrl = useMutation(api.drivers.generateUploadUrl);
-    // const updateProfile = useMutation(api.users.updateProfile); // Not used directly for photo anymore
     const saveProfilePhoto = useMutation(api.users.saveProfilePhoto);
-    // Conditionally fetch image URL only if we have a valid storage ID
-    // @ts-ignore
-    const getImageUrlQuery = useQuery(api.drivers.getImageUrl,
-        profile?.profilePhoto ? { storageId: profile.profilePhoto } : "skip"
-    );
-
-    // We can't conditionally call hooks based on state easily, so we'll do the URL fetch manually or in a separate effect if needed.
-    // Actually, distinct Step: Upload -> Get ID -> constructing URL manually is risky if format changes.
-    // Better: Update `updateProfile` to accept storageId or just construct the URL if we know the domain.
-    // For now, we will fetch the Upload URL, upload, and since we need a public URL for `profilePhoto` (string),
-    // we might need a backend mutation that takes storageId and sets the photo.
-    // Let's rely on a helper or just assume standard convex storage URL for now to save round trips?
-    // No, cleaner is: Client uploads -> gets ID -> calls `updateProfilePhoto({ storageId })`.
-    // But `updateProfile` takes string.
-    // Let's just implement the picker and upload, and use a simpler approach:
-    // 1. Pick -> 2. Upload -> 3. Alert "Photo Uploaded" (and ideally trigger a backend update if we can).
-
-    const [activeTab, setActiveTab] = useState<'passport' | 'settings'>('passport');
     const [uploading, setUploading] = useState(false);
 
-    // Dummy data till backend connects perfectly
+    // Derived Data
     const driverName = profile?.user?.name || "Driver";
     const rating = profile?.driver?.rating?.toFixed(1) || "5.0";
-    const vehicleType = profile?.vehicle?.type || 'tricycle';
-    const vehicleImage = vehicleAssets[vehicleType] || vehicleAssets['tricycle'];
+    const totalTrips = profile?.driver?.total_trips || 0;
     const isVerified = profile?.driver?.verified ?? false;
 
     const handlePickImage = async () => {
@@ -62,7 +35,8 @@ export default function ProfileScreen() {
             }
 
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                // @ts-ignore
+                mediaTypes: ImagePicker.MediaType ? ImagePicker.MediaType.Images : ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [1, 1],
                 quality: 0.5,
@@ -71,23 +45,15 @@ export default function ProfileScreen() {
             if (!result.canceled) {
                 setUploading(true);
                 const uri = result.assets[0].uri;
-
-                // 1. Get Upload URL
                 const postUrl = await generateUploadUrl();
-
-                // 2. Convert to blob
                 const response = await fetch(uri);
                 const blob = await response.blob();
-
-                // 3. Upload
                 const uploadResponse = await fetch(postUrl, {
                     method: "POST",
                     headers: { "Content-Type": blob.type },
                     body: blob,
                 });
                 const { storageId } = await uploadResponse.json();
-
-                // 4. Update Profile via Backend
                 await saveProfilePhoto({ storageId });
                 Alert.alert("Success", "Profile photo updated successfully!");
             }
@@ -107,537 +73,246 @@ export default function ProfileScreen() {
         }
     };
 
-    const renderPassport = () => (
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-            {/* Verification Status Banner */}
-            <View style={[styles.statusBanner, { backgroundColor: isVerified ? Colors.success : Colors.warning }]}>
-                {isVerified ? <ShieldCheck size={20} color="white" /> : <AlertCircle size={20} color="white" />}
-                <Text style={styles.statusBannerText}>
-                    {isVerified ? "VERIFIED DRIVER" : "VERIFICATION PENDING"}
-                </Text>
+    const MenuItem = ({ icon: Icon, label, subLabel, onPress, color = Colors.text }: any) => (
+        <TouchableOpacity style={styles.menuItem} onPress={onPress}>
+            <View style={styles.menuIconBg}>
+                <Icon size={20} color={Colors.primary} />
             </View>
-
-            {/* ID Card Header */}
-            <View style={styles.header}>
-                <View style={styles.avatarContainer}>
-                    <Image
-                        source={{ uri: profile?.user?.profilePhoto || 'https://via.placeholder.com/100' }}
-                        style={styles.avatar}
-                    />
-                    <TouchableOpacity
-                        style={styles.editPhotoIcon}
-                        onPress={handlePickImage}
-                        disabled={uploading}
-                    >
-                        {uploading ? (
-                            <ActivityIndicator size="small" color="white" />
-                        ) : (
-                            <Camera size={16} color="white" />
-                        )}
-                    </TouchableOpacity>
-                    <View style={styles.ratingBadge}>
-                        <Award size={14} color="white" />
-                        <Text style={styles.ratingText}>{rating}</Text>
-                    </View>
-                </View>
-                <Text style={styles.name}>{driverName}</Text>
-                <Text style={styles.role}>Professional Driver</Text>
-                <Text style={styles.idNumber}>ID: {profile?.driver?.nida_number || "PENDING"}</Text>
+            <View style={styles.menuContent}>
+                <Text style={[styles.menuLabel, { color }]}>{label}</Text>
+                {subLabel && <Text style={styles.menuSub}>{subLabel}</Text>}
             </View>
-
-            {/* Read-Only Vehicle Card */}
-            <View style={styles.securityNote}>
-                <AlertCircle size={16} color="#666" />
-                <Text style={styles.securityText}>Vehicle details are managed by Admin for security.</Text>
-            </View>
-
-            <View style={styles.vehicleCard}>
-                <View style={styles.cardHeader}>
-                    <Text style={styles.sectionTitleWhite}>Chombo Chako / Vehicle</Text>
-                    <View style={styles.verifiedBadge}>
-                        <Text style={styles.verifiedText}>{isVerified ? "APPROVED" : "PENDING"}</Text>
-                    </View>
-                </View>
-
-                <Image source={vehicleImage} style={styles.vehicleImage} resizeMode="contain" />
-
-                <View style={styles.plateContainer}>
-                    <Text style={styles.plateLabel}>PLATE NUMBER</Text>
-                    <Text style={styles.vehiclePlate}>{profile?.vehicle?.plate_number || "PENDING"}</Text>
-                </View>
-
-                <View style={styles.vehicleDetailsRow}>
-                    <View style={styles.detailItem}>
-                        <Text style={styles.detailLabel}>TYPE</Text>
-                        <Text style={styles.detailValue}>{vehicleType.toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.detailItem}>
-                        <Text style={styles.detailLabel}>CAPACITY</Text>
-                        <Text style={styles.detailValue}>{profile?.vehicle?.capacity_kg || 0} KG</Text>
-                    </View>
-                </View>
-            </View>
-
-            {/* Documents List */}
-            <View style={styles.complianceSection}>
-                <Text style={styles.sectionTitle}>Documents</Text>
-                {[
-                    { name: "Driver's License", valid: true },
-                    { name: "Vehicle Insurance", valid: true },
-                    { name: "LATRA Permit", valid: false },
-                ].map((doc, index) => (
-                    <View key={index} style={styles.docRow}>
-                        <View style={styles.docInfo}>
-                            <FileText size={20} color="#666" />
-                            <Text style={styles.docName}>{doc.name}</Text>
-                        </View>
-                        <View style={[
-                            styles.statusLight,
-                            { backgroundColor: doc.valid ? Colors.success : Colors.error }
-                        ]}>
-                            {doc.valid ?
-                                <ShieldCheck size={16} color="white" /> :
-                                <View style={styles.cross} />
-                            }
-                        </View>
-                    </View>
-                ))}
-            </View>
-        </ScrollView>
-    );
-
-    const renderSettings = () => (
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>App Settings</Text>
-
-                <View style={styles.settingRow}>
-                    <View style={styles.settingIconBg}>
-                        <Globe size={20} color={Colors.primary} />
-                    </View>
-                    <View style={styles.settingInfo}>
-                        <Text style={styles.settingLabel}>Language / Lugha</Text>
-                        <Text style={styles.settingSub}>English (US)</Text>
-                    </View>
-                    <Text style={styles.actionText}>Change</Text>
-                </View>
-
-                <View style={styles.divider} />
-
-                <TouchableOpacity
-                    style={styles.settingRow}
-                    onPress={() => router.push('/(driver)/documents')}
-                >
-                    <View style={styles.settingIconBg}>
-                        <FileText size={20} color={Colors.primary} />
-                    </View>
-                    <View style={styles.settingInfo}>
-                        <Text style={styles.settingLabel}>My Documents</Text>
-                        <Text style={styles.settingSub}>NIDA, License, Insurance, Permit</Text>
-                    </View>
-                    <Text style={styles.actionText}>View</Text>
-                </TouchableOpacity>
-
-                <View style={styles.divider} />
-
-                <View style={styles.settingRow}>
-                    <View style={styles.settingIconBg}>
-                        <Phone size={20} color={Colors.primary} />
-                    </View>
-                    <View style={styles.settingInfo}>
-                        <Text style={styles.settingLabel}>Additional Phone</Text>
-                        <Text style={styles.settingSub}>{profile?.user?.emergencyContact || "Add Number"}</Text>
-                    </View>
-                    <Text style={styles.actionText}>Edit</Text>
-                </View>
-
-                <View style={styles.divider} />
-
-                <View style={styles.settingRow}>
-                    <View style={styles.settingIconBg}>
-                        <Bell size={20} color={Colors.primary} />
-                    </View>
-                    <View style={styles.settingInfo}>
-                        <Text style={styles.settingLabel}>Notifications</Text>
-                        <Text style={styles.settingSub}>Ride alerts, updates</Text>
-                    </View>
-                    <Switch value={true} onValueChange={() => { }} trackColor={{ false: "#767577", true: Colors.primary }} />
-                </View>
-            </View>
-
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Account</Text>
-                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-                    <LogOut size={20} color={Colors.error} />
-                    <Text style={styles.logoutText}>Log Out</Text>
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.versionInfo}>
-                <Text style={styles.versionText}>BebaX Driver v1.0.0 (Build 124)</Text>
-                <Text style={styles.copyright}>© 2025 EphraimDevelops</Text>
-            </View>
-        </ScrollView>
+            <ChevronRight size={20} color="#CCC" />
+        </TouchableOpacity>
     );
 
     return (
         <SafeAreaView style={styles.container}>
-            {/* Tab Switcher */}
-            <View style={styles.tabContainer}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'passport' && styles.activeTab]}
-                    onPress={() => setActiveTab('passport')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'passport' && styles.activeTabText]}>My Passport</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'settings' && styles.activeTab]}
-                    onPress={() => setActiveTab('settings')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'settings' && styles.activeTabText]}>Settings</Text>
-                </TouchableOpacity>
-            </View>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
-            {activeTab === 'passport' ? renderPassport() : renderSettings()}
+                {/* HERO HEADER */}
+                <View style={styles.header}>
+                    <View style={styles.profileRow}>
+                        <View style={styles.avatarWrapper}>
+                            <Image
+                                source={profile?.user?.profilePhoto
+                                    ? { uri: profile.user.profilePhoto }
+                                    : require('../../assets/images/avatar_placeholder.png')
+                                }
+                                style={styles.avatar}
+                            />
+                            <TouchableOpacity style={styles.editBtn} onPress={handlePickImage} disabled={uploading}>
+                                {uploading ? <ActivityIndicator size="small" color="#FFF" /> : <Camera size={14} color="#FFF" />}
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.profileInfo}>
+                            <Text style={styles.name}>{driverName}</Text>
+                            <View style={styles.verifiedRow}>
+                                {isVerified ? (
+                                    <>
+                                        <ShieldCheck size={14} color="#10B981" />
+                                        <Text style={styles.verifiedText}>Verified Driver</Text>
+                                    </>
+                                ) : (
+                                    <>
+                                        <AlertCircle size={14} color="#F59E0B" />
+                                        <Text style={[styles.verifiedText, { color: '#F59E0B' }]}>Verification Pending</Text>
+                                    </>
+                                )}
+                            </View>
+                        </View>
+                        <View style={styles.ratingBadge}>
+                            <Star size={14} color="#FFF" fill="#FFF" />
+                            <Text style={styles.ratingText}>{rating}</Text>
+                        </View>
+                    </View>
+
+                    {/* QUICK STATS */}
+                    <View style={styles.statsRow}>
+                        <View style={styles.statItem}>
+                            <Text style={styles.statValue}>{totalTrips}</Text>
+                            <Text style={styles.statLabel}>Trips</Text>
+                        </View>
+                        <View style={styles.statDivider} />
+                        <View style={styles.statItem}>
+                            <Text style={styles.statValue}>2.5</Text>
+                            <Text style={styles.statLabel}>Years</Text>
+                        </View>
+                        <View style={styles.statDivider} />
+                        <View style={styles.statItem}>
+                            <Text style={styles.statValue}>100%</Text>
+                            <Text style={styles.statLabel}>Acceptance</Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* VERIFICATION STATUS WIDGET */}
+                <TouchableOpacity
+                    style={[styles.verificationWidget, isVerified ? styles.vWidgetSuccess : styles.vWidgetPending]}
+                    onPress={() => router.push('/(driver)/documents')}
+                >
+                    <View style={styles.vWidgetIcon}>
+                        {isVerified ? <ShieldCheck size={24} color="#065F46" /> : <AlertCircle size={24} color="#92400E" />}
+                    </View>
+                    <View style={styles.vWidgetContent}>
+                        <Text style={[styles.vWidgetTitle, isVerified ? { color: '#065F46' } : { color: '#92400E' }]}>
+                            {isVerified ? "Account Verified" : "Action Required"}
+                        </Text>
+                        <Text style={[styles.vWidgetSub, isVerified ? { color: '#047857' } : { color: '#B45309' }]}>
+                            {isVerified ? "All documents approved" : "Upload missing documents to go online"}
+                        </Text>
+                    </View>
+                    <ChevronRight size={20} color={isVerified ? '#065F46' : '#92400E'} />
+                </TouchableOpacity>
+
+                {/* MENU LIST */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionHeader}>My Account</Text>
+
+                    <MenuItem
+                        icon={Clock}
+                        label="Ride History"
+                        subLabel="View past trips and earnings"
+                        onPress={() => router.push('/(driver)/history')}
+                    />
+                    <MenuItem
+                        icon={FileText}
+                        label="Documents"
+                        subLabel="License, Insurance, Permits"
+                        onPress={() => router.push('/(driver)/documents')}
+                    />
+                    <MenuItem
+                        icon={Truck}
+                        label="Vehicle Details"
+                        subLabel={profile?.vehicle?.plate_number || "Manage vehicle"}
+                        onPress={() => router.push('/(driver)/vehicle')}
+                    />
+                    <MenuItem
+                        icon={CreditCard}
+                        label="Earnings & Payouts"
+                        subLabel="M-Pesa, Bank Account"
+                        onPress={() => router.push('/(driver)/earnings')}
+                    />
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionHeader}>Preferences</Text>
+
+                    <MenuItem
+                        icon={Settings}
+                        label="App Settings"
+                        subLabel="Navigation, Sounds, Language"
+                        onPress={() => router.push('/(driver)/settings')}
+                    />
+                    <MenuItem
+                        icon={HelpCircle}
+                        label="Support"
+                        subLabel="Get help with your account"
+                        onPress={() => { }}
+                    />
+                </View>
+
+                {/* DANGER ZONE */}
+                <View style={styles.section}>
+                    <Text style={[styles.sectionHeader, { color: Colors.error }]}>Danger Zone</Text>
+                    <MenuItem
+                        icon={LogOut}
+                        label="Log Out"
+                        onPress={handleLogout}
+                    />
+                    <TouchableOpacity style={styles.deleteAccountBtn} onPress={() => Alert.alert("Delete Account", "Contact support to delete your account data.")}>
+                        <Text style={styles.deleteAccountText}>Delete Account</Text>
+                    </TouchableOpacity>
+                </View>
+
+                <View style={styles.footer}>
+                    <Text style={styles.versionText}>BebaX Driver v1.0.0</Text>
+                </View>
+            </ScrollView>
         </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F5F7FA',
-    },
-    scrollContent: {
-        paddingBottom: 40,
-    },
-    // Tabs
-    tabContainer: {
-        flexDirection: 'row',
-        backgroundColor: 'white',
-        paddingHorizontal: 20,
-        paddingBottom: 0,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E0E0E0',
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 16,
-        alignItems: 'center',
-        borderBottomWidth: 3,
-        borderBottomColor: 'transparent',
-    },
-    activeTab: {
-        borderBottomColor: Colors.primary,
-    },
-    tabText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#888',
-        textTransform: 'uppercase',
-    },
-    activeTabText: {
-        color: Colors.primary,
-    },
-    // Banner
-    statusBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 12,
-        gap: 8,
-    },
-    statusBannerText: {
-        color: 'white',
-        fontSize: 12,
-        fontWeight: 'bold',
-        letterSpacing: 0.5,
-    },
+    container: { flex: 1, backgroundColor: '#F8F9FA' },
+    scrollContent: { paddingBottom: 40 },
+
     // Header
     header: {
-        backgroundColor: 'white',
+        backgroundColor: '#FFF',
         padding: 24,
-        alignItems: 'center',
-        borderBottomWidth: 1,
-        borderBottomColor: '#EEE',
+        borderBottomLeftRadius: 32,
+        borderBottomRightRadius: 32,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05, shadowRadius: 10, elevation: 5,
+        marginBottom: 20
     },
-    avatarContainer: {
-        position: 'relative',
-        marginBottom: 16,
+    profileRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+    avatarWrapper: { position: 'relative', marginRight: 16 },
+    avatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#F0F0F0' },
+    editBtn: {
+        position: 'absolute', bottom: 0, right: 0,
+        backgroundColor: Colors.primary, padding: 6, borderRadius: 12,
+        borderWidth: 2, borderColor: '#FFF'
     },
-    avatar: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
-        backgroundColor: '#EEE',
-        borderWidth: 3,
-        borderColor: 'white',
-        elevation: 5,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-    },
-    editPhotoIcon: {
-        position: 'absolute',
-        top: 0,
-        right: 0,
-        backgroundColor: Colors.primary,
-        padding: 6,
-        borderRadius: 12,
-        borderWidth: 2,
-        borderColor: 'white',
-    },
+    profileInfo: { flex: 1 },
+    name: { fontSize: 24, fontWeight: '800', color: '#121212', marginBottom: 4 },
+    verifiedRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    verifiedText: { fontSize: 13, fontWeight: '600', color: '#10B981' },
     ratingBadge: {
-        position: 'absolute',
-        bottom: 0,
-        right: 0,
-        backgroundColor: '#FFB300',
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
-        borderWidth: 2,
-        borderColor: 'white',
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: '#121212', paddingHorizontal: 10, paddingVertical: 6,
+        borderRadius: 12
     },
-    ratingText: {
-        color: 'white',
-        fontWeight: 'bold',
-        marginLeft: 4,
-        fontSize: 12,
-    },
-    name: {
-        fontSize: 22,
-        fontWeight: '800',
-        color: '#121212',
-    },
-    role: {
-        fontSize: 15,
-        color: '#666',
-        marginTop: 4,
-    },
-    idNumber: {
-        fontSize: 13,
-        color: '#999',
-        marginTop: 4,
-        fontFamily: 'monospace',
-        letterSpacing: 1,
-    },
-    // Security Note
-    securityNote: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: 16,
-        gap: 8,
-    },
-    securityText: {
-        fontSize: 12,
-        color: '#666',
-    },
-    // Vehicle Card
-    vehicleCard: {
-        margin: 20,
-        backgroundColor: '#1C1C1E',
-        borderRadius: 16,
-        padding: 24,
-        alignItems: 'center',
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 8,
-    },
-    cardHeader: {
-        width: '100%',
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    sectionTitleWhite: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: 'rgba(255,255,255,0.7)',
-        textTransform: 'uppercase',
-    },
-    verifiedBadge: {
-        backgroundColor: 'rgba(76, 175, 80, 0.2)', // Green trans
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 4,
+    ratingText: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
+
+    // Stats
+    statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8F9FA', borderRadius: 16, padding: 16 },
+    statItem: { alignItems: 'center', flex: 1 },
+    statValue: { fontSize: 18, fontWeight: '800', color: '#121212' },
+    statLabel: { fontSize: 11, color: '#888', marginTop: 2, fontWeight: '500' },
+    statDivider: { width: 1, height: 24, backgroundColor: '#E0E0E0' },
+
+    // Verification Widget
+    verificationWidget: {
+        flexDirection: 'row', alignItems: 'center',
+        marginHorizontal: 24, marginBottom: 24,
+        padding: 16, borderRadius: 16,
         borderWidth: 1,
-        borderColor: Colors.success,
     },
-    verifiedText: {
-        color: Colors.success,
-        fontSize: 10,
-        fontWeight: 'bold',
-        letterSpacing: 1,
+    vWidgetSuccess: { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' },
+    vWidgetPending: { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
+    vWidgetIcon: { marginRight: 12 },
+    vWidgetContent: { flex: 1 },
+    vWidgetTitle: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
+    vWidgetSub: { fontSize: 12 },
+
+    // Sections
+    section: { marginBottom: 24, paddingHorizontal: 20 },
+    sectionHeader: { fontSize: 18, fontWeight: '700', color: '#121212', marginBottom: 12, marginLeft: 4 },
+    menuItem: {
+        flexDirection: 'row', alignItems: 'center',
+        backgroundColor: '#FFF', padding: 16, borderRadius: 16, marginBottom: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.03, shadowRadius: 4, elevation: 1
     },
-    vehicleImage: {
-        width: 220,
-        height: 140,
-        marginVertical: 12,
+    menuIconBg: {
+        width: 40, height: 40, borderRadius: 20,
+        backgroundColor: 'rgba(74, 144, 226, 0.08)',
+        alignItems: 'center', justifyContent: 'center', marginRight: 16
     },
-    plateContainer: {
-        width: '100%',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 16,
+    menuContent: { flex: 1 },
+    menuLabel: { fontSize: 16, fontWeight: '600', marginBottom: 2, color: '#1F2937' },
+    menuSub: { fontSize: 12, color: '#9CA3AF' },
+
+    // Danger Zone
+    deleteAccountBtn: {
+        alignItems: 'center', padding: 16, borderRadius: 16,
+        backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA',
+        marginTop: 8
     },
-    plateLabel: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 10,
-        marginBottom: 4,
-        letterSpacing: 1,
-    },
-    vehiclePlate: {
-        color: 'white',
-        fontSize: 24,
-        fontFamily: 'monospace',
-        fontWeight: '700',
-        letterSpacing: 4,
-    },
-    vehicleDetailsRow: {
-        flexDirection: 'row',
-        width: '100%',
-        justifyContent: 'space-between',
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.1)',
-        paddingTop: 16,
-    },
-    detailItem: {
-        alignItems: 'center',
-        flex: 1,
-    },
-    detailLabel: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 10,
-        marginBottom: 4,
-    },
-    detailValue: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    // Documents
-    complianceSection: {
-        marginHorizontal: 20,
-        backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 20,
-        marginBottom: 20,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#333',
-        marginBottom: 16,
-    },
-    docRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F0F0F0',
-    },
-    docInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flex: 1,
-    },
-    docName: {
-        fontSize: 16,
-        color: '#444',
-        marginLeft: 12,
-    },
-    statusLight: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    cross: {
-        width: 12,
-        height: 12,
-        backgroundColor: 'white',
-        transform: [{ rotate: '45deg' }],
-    },
-    // Settings
-    section: {
-        backgroundColor: 'white',
-        marginTop: 20,
-        marginHorizontal: 20,
-        borderRadius: 16,
-        padding: 20,
-    },
-    settingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 12,
-    },
-    settingIconBg: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: 'rgba(74, 144, 226, 0.1)',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 16,
-    },
-    settingInfo: {
-        flex: 1,
-    },
-    settingLabel: {
-        fontSize: 16,
-        color: '#333',
-        fontWeight: '500',
-    },
-    settingSub: {
-        fontSize: 13,
-        color: '#888',
-        marginTop: 2,
-    },
-    actionText: {
-        color: Colors.primary,
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    divider: {
-        height: 1,
-        backgroundColor: '#F0F0F0',
-        marginLeft: 52,
-    },
-    logoutButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 12,
-        gap: 8,
-    },
-    logoutText: {
-        color: Colors.error,
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    versionInfo: {
-        alignItems: 'center',
-        marginTop: 32,
-        marginBottom: 20,
-    },
-    versionText: {
-        color: '#999',
-        fontSize: 12,
-    },
-    copyright: {
-        color: '#BBB',
-        fontSize: 11,
-        marginTop: 4,
-    },
+    deleteAccountText: { color: '#DC2626', fontWeight: '700', fontSize: 14 },
+
+    footer: { alignItems: 'center', marginTop: 20 },
+    versionText: { color: '#CCC', fontSize: 12, fontWeight: '500' }
 });

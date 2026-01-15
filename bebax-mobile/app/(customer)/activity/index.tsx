@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@clerk/clerk-expo';
 import { useQuery } from 'convex/react';
 import { api } from '../../../src/convex/_generated/api';
 import { Colors } from '../../../src/constants/Colors';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function Activity() {
@@ -13,7 +13,6 @@ export default function Activity() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
 
-    // Real data from Convex
     const rides = useQuery(api.rides.listMyRides);
 
     useEffect(() => {
@@ -26,109 +25,99 @@ export default function Activity() {
 
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
-        const now = new Date();
-        const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-
-        if (diffDays === 0) {
-            return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        } else if (diffDays === 1) {
-            return `Yesterday, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        } else {
-            return date.toLocaleDateString([], { day: 'numeric', month: 'short' }) +
-                `, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        }
+        return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     };
 
-    const getVehicleIcon = (type: string) => {
-        switch (type?.toLowerCase()) {
-            case 'boda': return 'two-wheeler';
-            case 'bajaji': return 'electric-rickshaw';
-            case 'boxbody':
-            case 'truck': return 'local-shipping';
-            default: return 'local-taxi';
-        }
+    const formatTime = (dateString: string) => {
+        const date = new Date(dateString);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
-    const getStatusStyle = (status: string) => {
+    const getStatusConfig = (status: string) => {
         switch (status) {
-            case 'completed':
-            case 'delivered':
-                return styles.statusCompleted;
-            case 'cancelled':
-                return styles.statusCancelled;
+            case 'completed': return { color: '#10B981', bg: '#DCFCE7', label: 'Completed', icon: 'checkmark-circle' };
+            case 'cancelled': return { color: '#EF4444', bg: '#FEE2E2', label: 'Cancelled', icon: 'close-circle' };
             case 'ongoing':
-            case 'loading':
-            case 'accepted':
-                return styles.statusActive;
-            default:
-                return styles.statusPending;
+            case 'started': return { color: '#3B82F6', bg: '#DBEAFE', label: 'In Trip', icon: 'play-circle' };
+            case 'accepted': return { color: '#F59E0B', bg: '#FEF3C7', label: 'Driver Coming', icon: 'time' };
+            default: return { color: '#94A3B8', bg: '#F1F5F9', label: 'Pending', icon: 'ellipse' };
         }
     };
 
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
+            {/* LARGE HEADER */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color={Colors.text} />
-                </TouchableOpacity>
-                <Text style={styles.title}>MY ACTIVITY</Text>
+                <Text style={styles.hugeTitle}>Your Activity</Text>
+                <Text style={styles.subtitle}>Recent requests & deliveries</Text>
             </View>
 
             {rides === undefined ? (
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color={Colors.primary} />
-                    <Text style={styles.loadingText}>Loading your rides...</Text>
                 </View>
             ) : rides.length === 0 ? (
                 <View style={styles.emptyContainer}>
-                    <MaterialIcons name="history" size={64} color={Colors.textDim} />
-                    <Text style={styles.emptyTitle}>No rides yet</Text>
-                    <Text style={styles.emptyText}>Your ride history will appear here</Text>
+                    <View style={styles.emptyIconBg}>
+                        <Ionicons name="documents-outline" size={40} color={Colors.primary} />
+                    </View>
+                    <Text style={styles.emptyTitle}>No activity yet</Text>
+                    <Text style={styles.emptyText}>Your bookings will appear here.</Text>
                     <TouchableOpacity
                         style={styles.bookButton}
-                        onPress={() => router.push('/(customer)/dashboard')}
+                        onPress={() => router.push('/')}
                     >
-                        <Text style={styles.bookButtonText}>Book Your First Ride</Text>
+                        <Text style={styles.bookButtonText}>Start Moving</Text>
                     </TouchableOpacity>
                 </View>
             ) : (
-                <ScrollView contentContainerStyle={styles.list}>
-                    {rides.map((ride: any) => (
-                        <TouchableOpacity
-                            key={ride._id}
-                            style={styles.card}
-                            onPress={() => router.push(`/(customer)/activity/${ride._id}`)}
-                            activeOpacity={0.7}
-                        >
-                            <View style={styles.iconCol}>
-                                <View style={styles.iconBg}>
-                                    <MaterialIcons
-                                        name={getVehicleIcon(ride.vehicle_type)}
-                                        size={24}
-                                        color={Colors.primary}
-                                    />
+                <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+                    {rides.map((ride: any) => {
+                        const status = getStatusConfig(ride.status);
+                        return (
+                            <TouchableOpacity
+                                key={ride._id}
+                                style={styles.card}
+                                onPress={() => router.push(`/(customer)/activity/${ride._id}`)}
+                                activeOpacity={0.8}
+                            >
+                                {/* HEADER OF CARD */}
+                                <View style={styles.cardHeader}>
+                                    <View style={styles.dateRow}>
+                                        <Text style={styles.dateText}>{formatDate(ride.created_at)}</Text>
+                                        <Text style={styles.timeText}> • {formatTime(ride.created_at)}</Text>
+                                    </View>
+                                    <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
+                                        <Ionicons name={status.icon as any} size={12} color={status.color} />
+                                        <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+                                    </View>
                                 </View>
-                                <View style={styles.line} />
-                            </View>
-                            <View style={styles.infoCol}>
-                                <View style={styles.row}>
-                                    <Text style={styles.date}>{formatDate(ride.created_at)}</Text>
-                                    <Text style={[styles.status, getStatusStyle(ride.status)]}>
-                                        {ride.status?.replace('_', ' ').toUpperCase()}
-                                    </Text>
+
+                                {/* ROUTE VISUALIZATION */}
+                                <View style={styles.routeContainer}>
+                                    <View style={styles.routeLeft}>
+                                        <View style={[styles.dot, { backgroundColor: Colors.primary }]} />
+                                        <View style={styles.line} />
+                                        <View style={[styles.box, { borderColor: Colors.text }]} />
+                                    </View>
+                                    <View style={styles.routeRight}>
+                                        <Text style={styles.addressTitle} numberOfLines={1}>{ride.pickup_location?.address || "Current Location"}</Text>
+                                        <View style={{ height: 16 }} />
+                                        <Text style={styles.addressTitle} numberOfLines={1}>{ride.dropoff_location?.address || "Unknown"}</Text>
+                                    </View>
                                 </View>
-                                <Text style={styles.dest} numberOfLines={1}>
-                                    {ride.dropoff_location?.address || 'Unknown destination'}
-                                </Text>
-                                <Text style={styles.price}>
-                                    TSh {(ride.final_fare || ride.fare_estimate || 0).toLocaleString()}
-                                </Text>
-                            </View>
-                            <View style={styles.arrowCol}>
-                                <MaterialIcons name="chevron-right" size={24} color={Colors.textDim} />
-                            </View>
-                        </TouchableOpacity>
-                    ))}
+
+                                {/* FOOTER */}
+                                <View style={styles.cardFooter}>
+                                    <View style={styles.vehicleRow}>
+                                        {/* Mock vehicle icon based on type */}
+                                        <Text style={styles.vehicleText}>{ride.vehicle_type?.toUpperCase() || "VEHICLE"}</Text>
+                                    </View>
+                                    <Text style={styles.priceText}>TSh {(ride.final_fare || ride.fare_estimate).toLocaleString()}</Text>
+                                </View>
+                            </TouchableOpacity>
+                        );
+                    })}
                 </ScrollView>
             )}
         </View>
@@ -138,32 +127,29 @@ export default function Activity() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Colors.background,
+        backgroundColor: '#F8FAFC', // Slate-50
     },
     header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.border,
+        paddingHorizontal: 24,
+        paddingBottom: 20,
+        paddingTop: 10,
     },
-    backButton: {
-        marginRight: 16,
+    hugeTitle: {
+        fontSize: 32,
+        fontWeight: '800',
+        color: '#0F172A',
+        letterSpacing: -1,
     },
-    title: {
-        fontSize: 20,
-        fontWeight: '900',
-        color: Colors.text,
-        letterSpacing: 1,
+    subtitle: {
+        fontSize: 14,
+        color: '#64748B',
+        marginTop: 4,
+        fontWeight: '500',
     },
     loadingContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-    },
-    loadingText: {
-        marginTop: 16,
-        color: Colors.textDim,
     },
     emptyContainer: {
         flex: 1,
@@ -171,111 +157,147 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 40,
     },
+    emptyIconBg: {
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: '#EFF6FF',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
     emptyTitle: {
         fontSize: 20,
-        fontWeight: 'bold',
-        color: Colors.textLight,
-        marginTop: 16,
+        fontWeight: '700',
+        color: '#1E293B',
+        marginBottom: 8,
     },
     emptyText: {
-        color: Colors.textDim,
-        marginTop: 8,
+        color: '#64748B',
         textAlign: 'center',
+        marginBottom: 24,
     },
     bookButton: {
         backgroundColor: Colors.primary,
         paddingVertical: 14,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        marginTop: 24,
+        paddingHorizontal: 32,
+        borderRadius: 30,
+        shadowColor: Colors.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
     },
     bookButtonText: {
         color: 'white',
-        fontWeight: 'bold',
+        fontWeight: '700',
+        fontSize: 16,
     },
     list: {
-        padding: 20,
+        paddingHorizontal: 20,
+        paddingBottom: 100,
     },
     card: {
+        backgroundColor: 'white',
+        borderRadius: 24,
+        padding: 20,
+        marginBottom: 16,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 2,
+    },
+    cardHeader: {
         flexDirection: 'row',
-        marginBottom: 24,
-    },
-    iconCol: {
+        justifyContent: 'space-between',
         alignItems: 'center',
-        marginRight: 16,
+        marginBottom: 16,
     },
-    iconBg: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: Colors.surface,
-        justifyContent: 'center',
+    dateRow: {
+        flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: Colors.border,
+    },
+    dateText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#334155',
+    },
+    timeText: {
+        fontSize: 14,
+        color: '#94A3B8',
+    },
+    statusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 20,
+        gap: 4,
+    },
+    statusText: {
+        fontSize: 11,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    routeContainer: {
+        flexDirection: 'row',
+        marginBottom: 16,
+    },
+    routeLeft: {
+        alignItems: 'center',
+        marginRight: 12,
+        paddingTop: 4,
+    },
+    dot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
     },
     line: {
         width: 2,
+        height: 24,
+        backgroundColor: '#E2E8F0',
+        marginVertical: 4,
+    },
+    box: {
+        width: 10,
+        height: 10,
+        borderWidth: 2,
+        borderRadius: 2,
+    },
+    routeRight: {
         flex: 1,
-        backgroundColor: Colors.border,
-        marginTop: 8,
     },
-    infoCol: {
-        flex: 1,
-        backgroundColor: Colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        borderWidth: 1,
-        borderColor: Colors.border,
-    },
-    row: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    date: {
-        fontSize: 12,
-        color: Colors.textDim,
-        fontWeight: '600',
-    },
-    status: {
-        fontSize: 10,
-        fontWeight: 'bold',
-        textTransform: 'uppercase',
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 6,
-        overflow: 'hidden',
-    },
-    statusCompleted: {
-        backgroundColor: 'rgba(0, 200, 81, 0.1)',
-        color: '#00C851',
-    },
-    statusCancelled: {
-        backgroundColor: 'rgba(255, 68, 68, 0.1)',
-        color: '#FF4444',
-    },
-    statusActive: {
-        backgroundColor: 'rgba(255, 152, 0, 0.1)',
-        color: '#FF9800',
-    },
-    statusPending: {
-        backgroundColor: 'rgba(158, 158, 158, 0.1)',
-        color: '#9E9E9E',
-    },
-    dest: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: Colors.text,
+    addressTitle: {
+        fontSize: 15,
+        fontWeight: '500',
+        color: '#0F172A',
         marginBottom: 4,
     },
-    price: {
-        fontSize: 14,
-        color: Colors.primary,
-        fontWeight: '800',
+    cardFooter: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: '#F1F5F9',
     },
-    arrowCol: {
-        justifyContent: 'center',
-        paddingLeft: 8,
+    vehicleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F8FAFC',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+    },
+    vehicleText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    priceText: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: Colors.primary,
     },
 });

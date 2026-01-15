@@ -1,6 +1,6 @@
 "use node";
 
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { sendPushNotification, sendBulkPushNotifications, NotificationTemplates } from "../lib/pushNotifications";
 
@@ -151,5 +151,136 @@ export const notifyDriverVerification = action({
             to: args.driver_token,
             ...template,
         });
+    },
+});
+
+// ============================================
+// ADMIN ALERT NOTIFICATIONS
+// Critical alerts for Super Admins
+// ============================================
+
+/**
+ * Notify all admins of an SOS alert (CRITICAL)
+ */
+export const notifyAdminsSOS = internalAction({
+    args: {
+        admin_tokens: v.array(v.string()),
+        user_name: v.string(),
+        user_phone: v.string(),
+        location_address: v.string(),
+        sos_id: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const notifications = args.admin_tokens.map((token) => ({
+            to: token,
+            title: '🆘 EMERGENCY SOS ALERT',
+            body: `${args.user_name} (${args.user_phone}) triggered SOS at ${args.location_address}`,
+            sound: 'default' as const,
+            priority: 'high' as const,
+            data: { type: 'sos', sosId: args.sos_id },
+            categoryId: 'sos_alert',
+        }));
+
+        await sendBulkPushNotifications(notifications);
+    },
+});
+
+/**
+ * Notify admins of new support ticket
+ */
+export const notifyAdminsNewTicket = internalAction({
+    args: {
+        admin_tokens: v.array(v.string()),
+        ticket_subject: v.string(),
+        issue_type: v.string(),
+        priority: v.string(),
+        ticket_id: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const priorityEmoji = args.priority === 'critical' ? '🔴' : args.priority === 'high' ? '🟠' : '🟡';
+
+        const notifications = args.admin_tokens.map((token) => ({
+            to: token,
+            title: `${priorityEmoji} New Support Ticket`,
+            body: `[${args.issue_type}] ${args.ticket_subject}`,
+            sound: 'default' as const,
+            priority: args.priority === 'critical' ? 'high' as const : 'normal' as const,
+            data: { type: 'support_ticket', ticketId: args.ticket_id },
+        }));
+
+        await sendBulkPushNotifications(notifications);
+    },
+});
+
+/**
+ * Notify admins of new driver application
+ */
+export const notifyAdminsNewDriver = internalAction({
+    args: {
+        admin_tokens: v.array(v.string()),
+        driver_name: v.string(),
+        vehicle_type: v.string(),
+        driver_id: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const notifications = args.admin_tokens.map((token) => ({
+            to: token,
+            title: '🚛 New Driver Application',
+            body: `${args.driver_name} applied with ${args.vehicle_type}. Review pending.`,
+            sound: 'default' as const,
+            priority: 'normal' as const,
+            data: { type: 'driver_application', driverId: args.driver_id },
+        }));
+
+        await sendBulkPushNotifications(notifications);
+    },
+});
+
+/**
+ * Notify admins of critically low driver balance
+ */
+export const notifyAdminsLowBalance = action({
+    args: {
+        admin_tokens: v.array(v.string()),
+        driver_name: v.string(),
+        balance: v.number(),
+        driver_id: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const notifications = args.admin_tokens.map((token) => ({
+            to: token,
+            title: '💸 Low Balance Alert',
+            body: `${args.driver_name} has TZS ${args.balance.toLocaleString()} balance`,
+            sound: 'default' as const,
+            priority: 'normal' as const,
+            data: { type: 'low_balance', driverId: args.driver_id },
+        }));
+
+        await sendBulkPushNotifications(notifications);
+    },
+});
+
+/**
+ * Notify admins of large cash trip (fraud monitoring)
+ */
+export const notifyAdminsLargeCashTrip = internalAction({
+    args: {
+        admin_tokens: v.array(v.string()),
+        fare: v.number(),
+        driver_name: v.string(),
+        customer_name: v.string(),
+        ride_id: v.id("rides"),
+    },
+    handler: async (ctx, args) => {
+        const notifications = args.admin_tokens.map((token) => ({
+            to: token,
+            title: '💰 Large Cash Trip Alert',
+            body: `TZS ${args.fare.toLocaleString()} cash trip by ${args.driver_name}`,
+            sound: 'default' as const,
+            priority: 'high' as const,
+            data: { type: 'large_cash_trip', rideId: args.ride_id },
+        }));
+
+        await sendBulkPushNotifications(notifications);
     },
 });

@@ -1,6 +1,8 @@
 import { v } from "convex/values";
+// B2B Module - For Sync
 import { mutation, query } from "./_generated/server";
 import { nanoid } from "nanoid";
+import { calculateFare } from "./pricing";
 
 // Get organization by ID
 export const getOrganization = query({
@@ -28,19 +30,21 @@ export const getMyOrganization = query({
     },
 });
 
-// Create organization (B2B signup)
+// Create organization (B2B signup) - THE REAL REGISTRATION
 export const createOrganization = mutation({
     args: {
         name: v.string(),
-        tinNumber: v.optional(v.string()),
+        tinNumber: v.string(), // MANDATORY for Empire Edition
+        category: v.optional(v.string()),
         adminEmail: v.string(),
         phone: v.optional(v.string()),
         contactPerson: v.optional(v.string()),
         location: v.optional(v.object({
             lat: v.number(),
             lng: v.number(),
-            address: v.string(),
+            address: v.optional(v.string()),
         })),
+        licensePhotoId: v.optional(v.id("_storage")), // Storage ID for license photo
         industry: v.optional(v.string()),
         logisticsNeeds: v.optional(v.array(v.string())),
         expectedMonthlyVolume: v.optional(v.number()),
@@ -60,7 +64,13 @@ export const createOrganization = mutation({
             throw new Error("You are already part of an organization");
         }
 
-        // Create the organization
+        // Get photo URL if provided
+        let licensePhotoUrl = undefined;
+        if (args.licensePhotoId) {
+            licensePhotoUrl = await ctx.storage.getUrl(args.licensePhotoId);
+        }
+
+        // Create the organization with PENDING status
         const orgId = await ctx.db.insert("organizations", {
             name: args.name,
             tinNumber: args.tinNumber,
@@ -71,8 +81,8 @@ export const createOrganization = mutation({
             adminEmail: args.adminEmail,
             phone: args.phone,
             contactPerson: args.contactPerson,
-            location: args.location,
-            industry: args.industry,
+            location: args.location ? { lat: args.location.lat, lng: args.location.lng, address: args.location.address || '' } : undefined,
+            industry: args.category || args.industry, // Use category if provided
             logisticsNeeds: args.logisticsNeeds,
             expectedMonthlyVolume: args.expectedMonthlyVolume,
             specialRequirements: args.specialRequirements,
@@ -81,10 +91,11 @@ export const createOrganization = mutation({
             apiEnabled: false,
             monthlyVolume: 0,
             verified: false,
+            status: "pending", // 🔥 THE GATEKEEPER - Start as pending
             created_at: new Date().toISOString(),
         });
 
-        // Update user profile to link to org
+        // Update user profile to link to org and set as admin
         if (user) {
             await ctx.db.patch(user._id, {
                 orgId: orgId,
@@ -318,7 +329,7 @@ export const getNearbyBusinesses = query({
                     .filter((q) => q.eq(q.field("org_id"), org._id))
                     .collect();
                 const completedRides = rides.filter(r => r.status === "completed");
-                const totalRating = completedRides.reduce((sum, r) => sum + (r.customer_rating || 5), 0);
+                const totalRating = completedRides.reduce((sum: number, r: any) => sum + (r.customer_rating || 5), 0);
                 const avgRating = completedRides.length > 0 ? totalRating / completedRides.length : 0;
                 return {
                     ...org,
@@ -391,6 +402,8 @@ export const getBusinessAnalytics = query({
         const totalSpend = completedRides.reduce((sum, r) => sum + (r.final_fare || 0), 0);
         const totalCommission = totalSpend * (org.commissionRate || 0.15);
         const netPayment = totalSpend - totalCommission;
+
+
 
         // Group by period
         const groupedData: Record<string, { trips: number; spend: number; commission: number }> = {};
@@ -553,6 +566,104 @@ export const getContractedDrivers = query({
     },
 });
 
+// ============================================
+// DIGITAL SHOWROOM - METRICS API
+// ============================================
+
+// Record interaction (view, lead, pickup) for B2B attribution
+export const recordInteraction = mutation({
+    args: {
+        bizId: v.id("organizations"),
+        type: v.union(v.literal("view"), v.literal("lead"), v.literal("pickup")),
+    },
+    handler: async (ctx, args) => {
+        const org = await ctx.db.get(args.bizId);
+        if (!org) return { success: false };
+
+        switch (args.type) {
+            case "view":
+                await ctx.db.patch(args.bizId, {
+                    profile_views: (org.profile_views || 0) + 1,
+                });
+                break;
+            case "lead":
+                await ctx.db.patch(args.bizId, {
+                    lead_count: (org.lead_count || 0) + 1,
+                });
+                break;
+            case "pickup":
+                await ctx.db.patch(args.bizId, {
+                    pickup_count: (org.pickup_count || 0) + 1,
+                });
+                break;
+        }
+        return { success: true };
+    },
+});
+
+// Get showroom stats (for business dashboard)
+export const getShowroomStats = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) return null;
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!user?.orgId) return null;
+
+        const org = await ctx.db.get(user.orgId);
+        if (!org) return null;
+
+        // Get pickup rides count for this business
+        const pickupRides = await ctx.db
+            .query("rides")
+            .filter((q) => q.eq(q.field("origin_business_id"), user.orgId))
+            .collect();
+
+        return {
+            views: org.profile_views || 0,
+            leads: org.lead_count || 0,
+            pickups: pickupRides.length,
+            verified: org.verified || false,
+            locationLocked: org.location_locked || false,
+        };
+    },
+});
+
+// Update business profile (WhatsApp, operating hours)
+export const updateBusinessProfile = mutation({
+    args: {
+        whatsapp_number: v.optional(v.string()),
+        operating_hours: v.optional(v.string()),
+        description: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Not authenticated");
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!user?.orgId || user.orgRole !== "admin") {
+            throw new Error("Only organization admins can update profile");
+        }
+
+        await ctx.db.patch(user.orgId, {
+            whatsapp_number: args.whatsapp_number,
+            operating_hours: args.operating_hours,
+            description: args.description,
+        });
+
+        return { success: true };
+    },
+});
+
 // Top up organization wallet (Simulated payment)
 export const topUpWallet = mutation({
     args: {
@@ -608,8 +719,8 @@ export const checkSpendingLimit = async (
         const todayStr = new Date().toISOString().split('T')[0];
         const todayRides = await ctx.db
             .query("rides")
-            .withIndex("by_customer", (q) => q.eq("customer_clerk_id", user.clerkId))
-            .filter((q) => q.and(
+            .withIndex("by_customer", (q: any) => q.eq("customer_clerk_id", user.clerkId))
+            .filter((q: any) => q.and(
                 q.eq(q.field("org_id"), user.orgId),
                 q.gte(q.field("created_at"), todayStr) // Simple string comparison for today
             ))
@@ -625,5 +736,137 @@ export const checkSpendingLimit = async (
         }
     }
 
+
     return { allowed: true, orgId: user.orgId };
 };
+
+// ============================================
+// BUSINESS LOGISTICS (DISPATCH & TEAM)
+// ============================================
+
+// Add Staff Member
+export const addStaff = mutation({
+    args: {
+        name: v.string(),
+        phone: v.string(),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Not authenticated");
+
+        const admin = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!admin?.orgId || admin.orgRole !== "admin") {
+            throw new Error("Only admins can add staff");
+        }
+
+        // Check if user already exists by phone
+        // Note: Ideally we index by phone, but for now we might scan or rely on Clerk sync.
+        // Assuming current prototype behavior: Check if a user with this phone exists.
+        // In a real app, we'd trigger an invite flow.
+        const existingUser = await ctx.db
+            .query("userProfiles")
+            .filter(q => q.eq(q.field("phone"), args.phone))
+            .first();
+
+        if (existingUser) {
+            if (existingUser.orgId) {
+                throw new Error("User is already in an organization");
+            }
+            await ctx.db.patch(existingUser._id, {
+                orgId: admin.orgId,
+                orgRole: "user", // "user" = staff role
+            });
+            return { success: true, message: "User added to team" };
+        } else {
+            // Placeholder: In a real system we'd create an "Invite" record.
+            // For this MVP, we'll return a message.
+            // throw new Error("User not found on BebaX. Ask them to sign up first!");
+            return { success: false, message: "User not found. Ask them to sign up first!" };
+        }
+    },
+});
+
+// Dispatch Ride (B2B Booking)
+export const dispatchRide = mutation({
+    args: {
+        recipient_name: v.string(),
+        recipient_phone: v.string(),
+        vehicle_type: v.string(),
+        cargo_description: v.string(),
+        dropoff_location: v.object({
+            lat: v.number(),
+            lng: v.number(),
+            address: v.string(),
+        }),
+        distance: v.number(),
+        fare_estimate: v.number(),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Not authenticated");
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        if (!user?.orgId) throw new Error("Not part of an organization");
+
+        const org = await ctx.db.get(user.orgId);
+        if (!org) throw new Error("Organization not found");
+
+        if (!org.location) throw new Error("Organization location not set (required for dispatch)");
+
+        // 1. PRICE INTEGRITY CHECK (Backend is Source of Truth)
+        const pricing = await calculateFare(ctx, {
+            distanceKm: args.distance,
+            vehicleType: args.vehicle_type,
+            isBusiness: true, // Force B2B Margin
+        });
+        const authoritativeFare = pricing.fare;
+
+        // 2. Check Wallet/Limits
+        const limitCheck = await checkSpendingLimit(ctx, user._id, authoritativeFare);
+        if (!limitCheck.allowed) {
+            throw new Error(limitCheck.reason || "Spending limit exceeded");
+        }
+
+        // 3. Generate Waybill
+        const waybillNumber = `WB-${nanoid(6).toUpperCase()}`;
+
+        // 4. Create Ride
+        const rideId = await ctx.db.insert("rides", {
+            customer_clerk_id: user.clerkId,
+            org_id: org._id,
+            origin_business_id: org._id, // Attribution
+            pickup_location: org.location, // LOCKED to Store Location
+            dropoff_location: args.dropoff_location,
+            vehicle_type: args.vehicle_type,
+            cargo_details: args.cargo_description,
+            recipient_name: args.recipient_name,
+            recipient_phone: args.recipient_phone,
+            waybill_number: waybillNumber,
+            distance: args.distance,
+            fare_estimate: authoritativeFare, // Use Backend Price
+            status: "pending",
+            payment_method: "wallet",
+            payment_status: "pending", // Will be captured on completion
+            created_at: new Date().toISOString(),
+        });
+
+        // 5. Update Org Reserved Balance (Hold funds)
+        await ctx.db.patch(org._id, {
+            reservedBalance: (org.reservedBalance || 0) + authoritativeFare,
+        });
+
+        // 6. External SMS Alert (Placeholder)
+        console.log(`[SMS] To ${args.recipient_phone}: Your order from ${org.name} is on the way! Tracking: bebax.app/track/${rideId}`);
+
+        return { rideId, waybillNumber };
+    },
+});
+// End of file

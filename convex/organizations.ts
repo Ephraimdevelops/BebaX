@@ -111,3 +111,78 @@ export const getOrgRides = query({
         }));
     },
 });
+
+// Update Organization Profile
+export const updateProfile = mutation({
+    args: {
+        orgId: v.id("organizations"),
+        description: v.optional(v.string()),
+        coverPhoto: v.optional(v.string()), // URL or base64
+        logo: v.optional(v.string()),
+        gallery: v.optional(v.array(v.string())),
+        website: v.optional(v.string()),
+        industry: v.optional(v.string()),
+        location: v.optional(v.object({
+            lat: v.number(),
+            lng: v.number(),
+            address: v.string(),
+        })),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Not authenticated");
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        // Verify admin
+        if (!user?.orgId || user.orgId !== args.orgId || user.orgRole !== "admin") {
+            throw new Error("Unauthorized");
+        }
+
+        await ctx.db.patch(args.orgId, {
+            description: args.description,
+            coverPhoto: args.coverPhoto,
+            logo: args.logo,
+            gallery: args.gallery,
+            industry: args.industry,
+            location: args.location,
+        });
+
+        return { success: true };
+    },
+});
+
+// Verify Organization (Admin only)
+export const verify = mutation({
+    args: {
+        orgId: v.id("organizations"),
+        status: v.union(v.literal("verified"), v.literal("rejected"), v.literal("pending")),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) throw new Error("Not authenticated");
+
+        const user = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+            .first();
+
+        // Check if global admin (assuming role="admin" on userProfile means system admin? Or user.orgRole="admin"?)
+        // The b2b.ts logic used `user?.role !== "admin"`.
+        // Let's stick to that.
+
+        if (user?.role !== "admin") {
+            throw new Error("Only system admins can verify organizations");
+        }
+
+        await ctx.db.patch(args.orgId, {
+            verified: args.status === "verified",
+            verificationStatus: args.status,
+        });
+
+        return { success: true };
+    },
+});

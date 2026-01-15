@@ -167,7 +167,7 @@ export default function ReceiptScreen() {
 
                 <TouchableOpacity
                     style={[styles.actionButton, styles.secondaryButton]}
-                    onPress={() => router.replace('/(customer)/dashboard')}
+                    onPress={() => router.replace('/')}
                 >
                     <Text style={styles.secondaryButtonText}>BOOK ANOTHER RIDE</Text>
                 </TouchableOpacity>

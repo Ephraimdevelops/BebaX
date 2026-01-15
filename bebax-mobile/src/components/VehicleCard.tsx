@@ -12,10 +12,11 @@ interface VehicleCardProps {
     eta: string;
     selected: boolean;
     onSelect: () => void;
-    imageSource?: any; // Require source
+    imageSource?: any;
+    isLocked?: boolean; // NEW
 }
 
-export default function VehicleCard({ type, label, price, eta, selected, onSelect, imageSource }: VehicleCardProps) {
+export default function VehicleCard({ type, label, price, eta, selected, onSelect, imageSource, isLocked }: VehicleCardProps) {
 
     const renderIcon = () => {
         const color = selected ? Colors.primary : Colors.textDim;
@@ -30,11 +31,7 @@ export default function VehicleCard({ type, label, price, eta, selected, onSelec
 
     return (
         <TouchableOpacity
-            onPress={onSelect}
-            style={[
-                styles.card,
-                selected && styles.selectedCard
-            ]}
+        // ... (keep style)
         >
             <View style={styles.imageContainer}>
                 {imageSource ? (
@@ -46,7 +43,12 @@ export default function VehicleCard({ type, label, price, eta, selected, onSelec
 
             <View style={styles.info}>
                 <Text style={[styles.label, selected && styles.selectedText]}>{label}</Text>
-                <Text style={styles.price}>TSh {price.toLocaleString()}</Text>
+                <View style={styles.priceRow}>
+                    <Text style={[styles.price, isLocked && styles.lockedPrice]}>
+                        TSh {price.toLocaleString()}
+                    </Text>
+                    {isLocked && <Text style={styles.lockIcon}>🔒</Text>}
+                </View>
                 <Text style={styles.eta}>{eta}</Text>
             </View>
 
@@ -140,5 +142,17 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 12,
         fontWeight: 'bold',
+    },
+    priceRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4
+    },
+    lockedPrice: {
+        color: '#16A34A', // Green for locked
+        fontWeight: '700'
+    },
+    lockIcon: {
+        fontSize: 12
     }
 });

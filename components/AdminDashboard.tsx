@@ -39,7 +39,7 @@ export default function AdminDashboard() {
             if (approved) {
                 await verifyDriver({ driver_id: driverId });
             } else {
-                await rejectDriver({ driver_id: driverId, reason });
+                await rejectDriver({ driverId: driverId, reason });
             }
 
             toast({

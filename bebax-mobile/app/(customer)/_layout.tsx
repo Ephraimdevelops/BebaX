@@ -10,33 +10,35 @@ export default function CustomerLayout() {
             screenOptions={{
                 headerShown: false,
                 tabBarActiveTintColor: Colors.primary,
-                tabBarInactiveTintColor: Colors.textDim,
+                tabBarInactiveTintColor: '#94A3B8', // Slate-400 for a softer inactive state
                 tabBarStyle: {
-                    backgroundColor: Colors.surface,
+                    backgroundColor: '#FFFFFF',
                     borderTopWidth: 0,
                     elevation: 10,
-                    height: Platform.OS === 'ios' ? 88 : 68,
+                    height: Platform.OS === 'ios' ? 88 : 70,
                     paddingBottom: Platform.OS === 'ios' ? 28 : 12,
                     paddingTop: 12,
                     shadowColor: "#000",
-                    shadowOffset: { width: 0, height: -2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 10,
+                    shadowOffset: { width: 0, height: -5 },
+                    shadowOpacity: 0.05, // Very subtle shadow
+                    shadowRadius: 15,
                 },
                 tabBarLabelStyle: {
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: '600',
                     marginTop: 4,
+                    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto', // Enforce system fonts
                 },
             }}
         >
             <Tabs.Screen
-                name="dashboard"
+                name="map"
                 options={{
                     title: "BebaX",
                     tabBarIcon: ({ color, focused }) => (
                         <Ionicons name={focused ? "map" : "map-outline"} size={26} color={color} />
                     ),
+                    tabBarStyle: { display: 'none' }, // Hide tab bar on map - it has its own bottom sheet
                 }}
             />
             <Tabs.Screen
@@ -70,11 +72,14 @@ export default function CustomerLayout() {
             <Tabs.Screen name="support" options={{ href: null }} />
             <Tabs.Screen name="profile" options={{ href: null }} />
             <Tabs.Screen name="settings" options={{ href: null }} />
-            <Tabs.Screen name="list-business" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+            <Tabs.Screen name="list-business" options={{ href: null }} />
             <Tabs.Screen name="my-business" options={{ href: null }} />
-            <Tabs.Screen name="ride-status" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+            <Tabs.Screen name="ride-status" options={{ href: null }} />
             <Tabs.Screen name="notifications" options={{ href: null }} />
             <Tabs.Screen name="receipt" options={{ href: null }} />
+            <Tabs.Screen name="rate-ride" options={{ href: null }} />
+            <Tabs.Screen name="book-move" options={{ href: null }} />
+            <Tabs.Screen name="business/[id]" options={{ href: null }} />
         </Tabs>
     );
 }

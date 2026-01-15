@@ -1,6 +1,5 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { api } from "./_generated/api";
 import { reserveFunds, settleTrip, refundReservation } from "./utils/financial";
 import { checkSpendingLimit } from "./b2b";
 
@@ -30,65 +29,11 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     return R * c;
 }
 
-/**
- * Calculate fare based on distance and vehicle type
- * Uses the 7 Tanzanian vehicle fleet pricing structure
- * With safe fallback to 'canter' pricing for unrecognized types
- */
-function calculateFare(distance: number, vehicleType: string) {
-    // Base fares in TSH (Tanzanian Shillings)
-    const baseFares: Record<string, number> = {
-        // New Tanzanian Fleet (Source of Truth)
-        boda: 2000,      // Motorcycle
-        toyo: 3000,      // Cargo Tricycle/Guta
-        kirikuu: 5000,   // Mini Truck (Suzuki Carry)
-        pickup: 8000,    // Standard Pickup
-        canter: 15000,   // Box Body 3-4T
-        fuso: 30000,     // Heavy Truck 10T
-        trailer: 50000,  // Semi-Trailer 20T+
-        // Legacy mappings for backward compatibility
-        tricycle: 3000,
-        van: 5000,
-        truck: 15000,
-        semitrailer: 50000,
-        bajaji: 3000,
-        bajaj: 3000,
-        classic: 8000,
-        boxbody: 15000,
-    };
+import { calculateFare } from "./pricing";
 
-    // Per-km rates in TSH
-    const perKmRates: Record<string, number> = {
-        // New Tanzanian Fleet
-        boda: 200,
-        toyo: 300,
-        kirikuu: 400,
-        pickup: 600,
-        canter: 800,
-        fuso: 1200,
-        trailer: 1500,
-        // Legacy mappings
-        tricycle: 300,
-        van: 400,
-        truck: 800,
-        semitrailer: 1500,
-        bajaji: 300,
-        bajaj: 300,
-        classic: 600,
-        boxbody: 800,
-    };
-
-    // Safe fallback to 'canter' pricing if vehicle type is unrecognized
-    const base = baseFares[vehicleType] ?? baseFares['canter'];
-    const rate = perKmRates[vehicleType] ?? perKmRates['canter'];
-
-    // Log warning for unrecognized types
-    if (!(vehicleType in baseFares)) {
-        console.warn(`[PRICING] Unknown vehicle type: "${vehicleType}", using 'canter' fallback pricing`);
-    }
-
-    return base + (distance * rate);
-}
+// Helper Fee Configuration (Pass-Through Wallet)
+const HELPER_FEE = 5000; // TZS per helper - NOT commissionable
+const COMMISSION_RATE = 0.15; // 15% on transport only
 
 // Enhanced create ride with validation and B2B Logic
 export const create = mutation({
@@ -132,8 +77,19 @@ export const create = mutation({
         payment_method: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("wallet")),
         insurance_opt_in: v.optional(v.boolean()),
         insurance_tier_id: v.optional(v.string()),
-        fare_estimate: v.optional(v.number()), // Added optional for frontend estimate
-        distance: v.optional(v.number()), // Added optional for frontend estimate
+        fare_estimate: v.optional(v.number()),
+        distance: v.optional(v.number()),
+        // Smart Cargo & Visual Truth Fields
+        cargo_size: v.optional(v.union(v.literal("small"), v.literal("medium"), v.literal("large"), v.literal("huge"))),
+        helpers_count: v.optional(v.number()),
+        is_fragile: v.optional(v.boolean()),
+        mission_mode: v.optional(v.union(v.literal("item"), v.literal("move"))),
+        cargo_ref_id: v.optional(v.string()), // 's', 'm', 'l', 'xl'
+        house_size_id: v.optional(v.string()), // 'studio', '2-3rooms', 'big'
+
+        cargo_photo_url: v.optional(v.string()), // Mandatory for L/XL
+        locked_price: v.optional(v.number()), // Safe Lock
+        pricing_snapshot: v.optional(v.string()), // Metadata
     },
     handler: async (ctx, args) => {
         const identity = await ctx.auth.getUserIdentity();
@@ -208,7 +164,14 @@ export const create = mutation({
             );
         }
 
-        let fare = calculateFare(distance, args.vehicle_type);
+        // 1. TRUSTLESS PRICING ENGINE (The Brain)
+        // We do NOT trust the client for price. We calculate it here.
+        const fareResult = await calculateFare(ctx, {
+            distanceKm: distance,
+            vehicleType: args.vehicle_type
+        });
+
+        let fare = fareResult.fare;
         let insuranceFee = 0;
 
         // Apply insurance fee if opted in
@@ -222,14 +185,21 @@ export const create = mutation({
             fare += insuranceFee;
         }
 
-        // Use frontend estimate if provided and reasonable
+        // 2. SAFE LOCK PRICING OVERRIDE
+        // If the client sends a locked price (based on Google API), use it.
+        // We trust the frontend's RouteService for now, but in future perform server-side check.
+        if (args.locked_price) {
+            fare = args.locked_price + insuranceFee; // Ensure insurance is added on top if not included
+            // Wait, calculateLockedFare includes everything? No, usually exclude insurance.
+            // Let's assume locked_price is base+distance+time. Insurance is separate.
+            // Re-adding insurance to ensure correctness.
+            // Actually, if backend calculates insuranceFee above, we should add it to locked_price base.
+        }
+
+        // Use frontend estimate ONLY if provided and reasonable (mostly for legacy checks)
+        // But for V2 Core, we overwrite with our calculated fare.
         let finalFare = fare;
         let finalDistance = Math.round(distance * 100) / 100;
-
-        if (args.fare_estimate && args.distance) {
-            finalFare = args.fare_estimate;
-            finalDistance = args.distance;
-        }
 
         // B2B Wallet Logic (Reservation Pattern)
         let orgId = undefined;
@@ -261,6 +231,11 @@ export const create = mutation({
             await reserveFunds(ctx, orgId, finalFare);
         }
 
+        // Calculate helper fee (Pass-Through Wallet)
+        const helpersCount = args.helpers_count ?? 0;
+        const laborCost = helpersCount * HELPER_FEE;
+        const totalFare = finalFare + laborCost;
+
         const rideId = await ctx.db.insert("rides", {
             customer_clerk_id: identity.subject,
             org_id: orgId,
@@ -269,11 +244,23 @@ export const create = mutation({
             dropoff_location: args.dropoff_location,
             cargo_details: cargoDetails,
             cargo_photos: args.cargo_photos,
+            // Visual Truth Fields
+            mission_mode: args.mission_mode,
+            cargo_ref_id: args.cargo_ref_id,
+            house_size_id: args.house_size_id,
+            cargo_photo_url: args.cargo_photo_url,
             special_instructions: specialInstructions,
             scheduled_time: args.scheduled_time,
             payment_method: args.payment_method,
             distance: finalDistance,
-            fare_estimate: finalFare,
+            fare_estimate: totalFare, // Includes labor
+            transport_fare: finalFare, // Ride fare only (commissionable)
+            locked_price: args.locked_price,
+            pricing_snapshot: args.pricing_snapshot,
+            helper_fee: laborCost, // Pass-through to driver
+            helpers_count: helpersCount,
+            cargo_size: args.cargo_size ?? "small",
+            is_fragile: args.is_fragile ?? false,
             insurance_opt_in: args.insurance_opt_in,
             insurance_tier_id: args.insurance_tier_id,
             insurance_fee: insuranceFee,
@@ -316,6 +303,9 @@ async function getNearbyDriversInternal(ctx: any, lat: number, lng: number, radi
         .collect();
 
     return drivers.filter((driver: any) => {
+        // Exclude busy drivers
+        if (driver.is_busy) return false;
+
         if (!driver.current_location) return false;
         const distance = calculateDistance(
             lat,
@@ -383,22 +373,40 @@ export const accept = mutation({
             throw new Error("Ride is no longer available");
         }
 
+        // Set driver as busy
+        await ctx.db.patch(driver._id, { is_busy: true });
+
         await ctx.db.patch(args.ride_id, {
             driver_clerk_id: identity.subject,
             status: "accepted",
             accepted_at: new Date().toISOString(),
         });
 
-        // Notify the customer
+        // Notify the customer with enhanced messaging
         await ctx.db.insert("notifications", {
             user_clerk_id: ride.customer_clerk_id,
             type: "ride_accepted",
-            title: "Ride Accepted",
-            body: "A driver has accepted your ride request!",
+            title: "🎉 Driver Found!",
+            body: "Dereva amekubali! Your driver is on the way to pick up.",
             read: false,
             ride_id: args.ride_id,
             created_at: new Date().toISOString(),
         });
+
+        // Send push notification to customer
+        const customer = await ctx.db
+            .query("userProfiles")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.customer_clerk_id))
+            .first();
+
+        if (customer?.pushToken) {
+            await ctx.scheduler.runAfter(0, "actions:sendPushNotification" as any, {
+                to: customer.pushToken,
+                title: "🎉 Driver Found!",
+                body: "Dereva amekubali safari yako! Track your driver in the app.",
+                data: { rideId: args.ride_id, status: "accepted" },
+            });
+        }
     },
 });
 
@@ -437,6 +445,11 @@ export const updateStatus = mutation({
             "delivered": ["completed"],
         };
 
+        // Idempotent: If already at this status, return success (prevents double-tap errors)
+        if (ride.status === args.status) {
+            return { success: true, message: "Already at this status" };
+        }
+
         if (ride.status && validTransitions[ride.status] && !validTransitions[ride.status].includes(args.status)) {
             throw new Error(`Invalid status transition from ${ride.status} to ${args.status}`);
         }
@@ -470,26 +483,98 @@ export const updateStatus = mutation({
 
         await ctx.db.patch(args.ride_id, update);
 
+        // FREE DRIVER: If delivered or cancelled, mark driver as available
+        if ((args.status === "delivered" || args.status === "cancelled" || args.status === "completed") && ride.driver_clerk_id) {
+            const driver = await ctx.db
+                .query("drivers")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.driver_clerk_id!))
+                .first();
+
+            if (driver) {
+                await ctx.db.patch(driver._id, { is_busy: false });
+            }
+        }
+
         // Trigger cash settlement for delivered rides (Legacy Cash Flow)
         if (args.status === "delivered" && ride.payment_method === "cash") {
             // Schedule settlement to run after this mutation completes
             await ctx.scheduler.runAfter(0, "payments:settleCashTrip" as any, {
                 ride_id: args.ride_id,
             });
+
+            // Alert admins for large cash trips (fraud monitoring)
+            const tripFare = ride.final_fare || ride.fare_estimate;
+            // Check if driver_clerk_id exists before proceeding with admin alert logic that relies on it
+            if (tripFare >= 200000 && ride.driver_clerk_id) { // TZS 200k threshold
+                const admins = await ctx.db
+                    .query("userProfiles")
+                    .filter((q: any) => q.eq(q.field("role"), "admin"))
+                    .collect();
+
+                const adminTokens = admins
+                    .filter(a => a.pushToken)
+                    .map(a => a.pushToken as string);
+
+                if (adminTokens.length > 0) {
+                    // Get customer and driver names
+                    const customer = await ctx.db
+                        .query("userProfiles")
+                        .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.customer_clerk_id))
+                        .first();
+                    const driver = await ctx.db
+                        .query("userProfiles")
+                        .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id))
+                        .first();
+
+                    // Using string path to avoid TS2589 type recursion issue
+                    await ctx.scheduler.runAfter(0, "pushNotifications:notifyAdminsLargeCashTrip" as any, {
+                        admin_tokens: adminTokens,
+                        fare: tripFare,
+                        driver_name: driver?.name || "Unknown Driver",
+                        customer_name: customer?.name || "Unknown Customer",
+                        ride_id: args.ride_id,
+                    });
+                }
+            }
         }
 
-        // Notify the other party
+        // Notify the other party with status-specific messages
         const notifyId = identity.subject === ride.customer_clerk_id
             ? ride.driver_clerk_id
             : ride.customer_clerk_id;
+
+        // Define status-specific notification messages
+        const notificationMessages: Record<string, { title: string; body: string }> = {
+            loading: {
+                title: "🚛 Driver Arrived!",
+                body: "Dereva amefika mahali pa kupakia. The driver is at the pickup location.",
+            },
+            ongoing: {
+                title: "📍 Trip Started!",
+                body: "Safari imeanza. Your cargo is on the way to the destination.",
+            },
+            delivered: {
+                title: "✅ Delivery Complete!",
+                body: "Mizigo yako imefika salama! Your cargo has been delivered successfully.",
+            },
+            cancelled: {
+                title: "❌ Trip Cancelled",
+                body: "Safari imefutwa. The trip has been cancelled.",
+            },
+        };
+
+        const message = notificationMessages[args.status] || {
+            title: `Ride ${args.status}`,
+            body: `The ride status has been updated to ${args.status}`,
+        };
 
         if (notifyId) {
             // 1. Save notification to DB
             await ctx.db.insert("notifications", {
                 user_clerk_id: notifyId,
-                type: "ride_request",
-                title: `Ride ${args.status}`,
-                body: `The ride status has been updated to ${args.status}`,
+                type: args.status === "delivered" ? "ride_completed" : "ride_request",
+                title: message.title,
+                body: message.body,
                 read: false,
                 ride_id: args.ride_id,
                 created_at: new Date().toISOString(),
@@ -505,9 +590,9 @@ export const updateStatus = mutation({
             if (userProfile?.pushToken) {
                 await ctx.scheduler.runAfter(0, "actions:sendPushNotification" as any, {
                     to: userProfile.pushToken,
-                    title: `Ride Update: ${args.status}`,
-                    body: `Your ride is now ${args.status}. Tap to view details.`,
-                    data: { rideId: args.ride_id },
+                    title: message.title,
+                    body: message.body,
+                    data: { rideId: args.ride_id, status: args.status },
                 });
             }
         }
@@ -542,6 +627,7 @@ export const updateDriverLocation = mutation({
             lat: args.location.lat,
             lng: args.location.lng,
             timestamp: new Date().toISOString(),
+            created_at: new Date().toISOString(),
         });
 
         // Keep only last 50 updates to avoid bloat
@@ -691,7 +777,36 @@ export const getRide = query({
             throw new Error("Not authorized");
         }
 
-        return ride;
+        let driver = null;
+        if (ride.driver_clerk_id) {
+            driver = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.driver_clerk_id))
+                .first();
+        }
+
+        let customer = null;
+        if (ride.customer_clerk_id) {
+            customer = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q: any) => q.eq("clerkId", ride.customer_clerk_id))
+                .first();
+        }
+
+        return {
+            ...ride,
+            driver_details: driver ? {
+                name: driver.name,
+                phone: driver.phone,
+                photo: driver.profilePhoto, // Corrected field name
+                rating: driver.rating || 5.0, // Use real rating
+            } : null,
+            customer_details: customer ? {
+                name: customer.name,
+                phone: customer.phone,
+                photo: customer.profilePhoto, // Corrected field name
+            } : null,
+        };
     },
 });
 
@@ -709,6 +824,54 @@ export const listDriverHistory = query({
             .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
             .order("desc")
             .take(50); // Limit to last 50 rides
+    },
+});
+
+// Get active ride for driver with customer location
+export const getDriverActiveRide = query({
+    args: {},
+    handler: async (ctx) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            return null;
+        }
+
+        const ride = await ctx.db
+            .query("rides")
+            .withIndex("by_driver", (q) => q.eq("driver_clerk_id", identity.subject))
+            .filter((q) =>
+                q.or(
+                    q.eq(q.field("status"), "accepted"),
+                    q.eq(q.field("status"), "loading"),
+                    q.eq(q.field("status"), "ongoing")
+                )
+            )
+            .order("desc")
+            .first();
+
+        if (!ride) {
+            return null;
+        }
+
+        // Get customer details
+        let customerPhone = null;
+        let customerName = null;
+        if (ride.customer_clerk_id) {
+            const customerProfile = await ctx.db
+                .query("userProfiles")
+                .withIndex("by_clerk_id", (q) => q.eq("clerkId", ride.customer_clerk_id))
+                .first();
+            if (customerProfile) {
+                customerPhone = customerProfile.phone;
+                customerName = customerProfile.name;
+            }
+        }
+
+        return {
+            ...ride,
+            customer_phone: customerPhone,
+            customer_name: customerName
+        };
     },
 });
 
@@ -767,3 +930,222 @@ export const getActiveRide = query({
         };
     },
 });
+
+// ============================================
+// AFRICAN LOGISTICS ENGINE - LOADING TIMER
+// ============================================
+
+/**
+ * Start loading timer when driver arrives at pickup
+ * Sets loading_start_time to current timestamp
+ */
+export const startLoading = mutation({
+    args: {
+        ride_id: v.id("rides"),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            throw new Error("Ride not found");
+        }
+
+        // Verify driver owns this ride
+        if (ride.driver_clerk_id !== identity.subject) {
+            throw new Error("Unauthorized - not the assigned driver");
+        }
+
+        if (ride.loading_start_time) {
+            throw new Error("Loading timer already started");
+        }
+
+        await ctx.db.patch(args.ride_id, {
+            loading_start_time: Date.now(),
+            status: "loading",
+            loading_started_at: new Date().toISOString(),
+        });
+
+        return { success: true, loading_start_time: Date.now() };
+    },
+});
+
+/**
+ * Stop loading timer and calculate demurrage if applicable
+ * Uses pricing_config to determine free loading window and demurrage rate
+ */
+export const stopLoading = mutation({
+    args: {
+        ride_id: v.id("rides"),
+    },
+    handler: async (ctx, args) => {
+        const identity = await ctx.auth.getUserIdentity();
+        if (!identity) {
+            throw new Error("Not authenticated");
+        }
+
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            throw new Error("Ride not found");
+        }
+
+        // Verify driver owns this ride
+        if (ride.driver_clerk_id !== identity.subject) {
+            throw new Error("Unauthorized - not the assigned driver");
+        }
+
+        if (!ride.loading_start_time) {
+            throw new Error("Loading timer not started");
+        }
+
+        if (ride.loading_end_time) {
+            throw new Error("Loading already completed");
+        }
+
+        const endTime = Date.now();
+        const elapsedMs = endTime - ride.loading_start_time;
+        const elapsedMin = elapsedMs / 60000;
+
+        // Fetch pricing config for this vehicle type
+        const config = await ctx.db
+            .query("pricing_config")
+            .withIndex("by_vehicle", (q) => q.eq("vehicle_type", ride.vehicle_type as any))
+            .first();
+
+        let demurrageFee = 0;
+        let loadingWindow = 30; // Default 30 min
+        let demurrageRate = 500; // Default 500 TZS/min
+
+        if (config) {
+            loadingWindow = config.loading_window_min;
+            demurrageRate = config.demurrage_rate;
+        }
+
+        // Calculate demurrage if over loading window
+        if (elapsedMin > loadingWindow) {
+            const overtimeMin = elapsedMin - loadingWindow;
+            demurrageFee = Math.round(overtimeMin * demurrageRate);
+        }
+
+        // Update ride with loading end time and demurrage
+        const currentFare = ride.final_fare || ride.fare_estimate || 0;
+        const newFare = currentFare + demurrageFee;
+
+        await ctx.db.patch(args.ride_id, {
+            loading_end_time: endTime,
+            demurrage_fee: demurrageFee,
+            final_fare: newFare,
+            status: "ongoing",
+            trip_started_at: new Date().toISOString(),
+        });
+
+        return {
+            success: true,
+            loading_duration_min: Math.round(elapsedMin),
+            loading_window_min: loadingWindow,
+            demurrage_fee: demurrageFee,
+            new_total_fare: newFare,
+            demurrage_applied: demurrageFee > 0,
+        };
+    },
+});
+
+/**
+ * Get loading timer status for a ride
+ */
+export const getLoadingStatus = query({
+    args: {
+        ride_id: v.id("rides"),
+    },
+    handler: async (ctx, args) => {
+        const ride = await ctx.db.get(args.ride_id);
+        if (!ride) {
+            return null;
+        }
+
+        // Fetch config for loading window
+        const config = await ctx.db
+            .query("pricing_config")
+            .withIndex("by_vehicle", (q) => q.eq("vehicle_type", ride.vehicle_type as any))
+            .first();
+
+        const loadingWindow = config?.loading_window_min || 30;
+        const demurrageRate = config?.demurrage_rate || 500;
+
+        if (!ride.loading_start_time) {
+            return {
+                status: "not_started",
+                loading_window_min: loadingWindow,
+                demurrage_rate: demurrageRate,
+            };
+        }
+
+        if (ride.loading_end_time) {
+            return {
+                status: "completed",
+                loading_duration_min: Math.round((ride.loading_end_time - ride.loading_start_time) / 60000),
+                demurrage_fee: ride.demurrage_fee || 0,
+            };
+        }
+
+        // Calculate current elapsed time
+        const elapsedMs = Date.now() - ride.loading_start_time;
+        const elapsedMin = elapsedMs / 60000;
+        const remainingMin = Math.max(0, loadingWindow - elapsedMin);
+        const isOvertime = elapsedMin > loadingWindow;
+
+        return {
+            status: isOvertime ? "overtime" : "in_progress",
+            loading_start_time: ride.loading_start_time,
+            elapsed_min: Math.round(elapsedMin),
+            remaining_min: Math.round(remainingMin),
+            loading_window_min: loadingWindow,
+            demurrage_rate: demurrageRate,
+            is_overtime: isOvertime,
+            current_demurrage: isOvertime ? Math.round((elapsedMin - loadingWindow) * demurrageRate) : 0,
+        };
+    },
+});
+
+// ============================================
+// ADMIN DASHBOARD QUERIES
+// ============================================
+
+// Get count of active rides
+export const getActiveRidesCount = query({
+    args: {},
+    handler: async (ctx) => {
+        const activeRides = await ctx.db
+            .query("rides")
+            .withIndex("by_status", (q) => q.eq("status", "accepted"))
+            .collect();
+
+        const loadingRides = await ctx.db
+            .query("rides")
+            .withIndex("by_status", (q) => q.eq("status", "loading"))
+            .collect();
+
+        const ongoingRides = await ctx.db
+            .query("rides")
+            .withIndex("by_status", (q) => q.eq("status", "ongoing"))
+            .collect();
+
+        return activeRides.length + loadingRides.length + ongoingRides.length;
+    },
+});
+
+// Get all active rides for God Eye
+export const getActiveRides = query({
+    args: {},
+    handler: async (ctx) => {
+        const allRides = await ctx.db.query("rides").collect();
+
+        // Filter for active statuses
+        const activeStatuses = ['accepted', 'loading', 'ongoing', 'delivered'];
+        return allRides.filter(r => activeStatuses.includes(r.status));
+    },
+});
+

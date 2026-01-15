@@ -5,8 +5,11 @@ import { useQuery } from 'convex/react';
 import { api } from '../../src/convex/_generated/api';
 import { Colors } from '../../src/constants/Colors';
 import { Clock, MapPin, TriangleAlert } from 'lucide-react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 
 export default function HistoryScreen() {
+    const router = useRouter();
     // @ts-ignore
     const rides = useQuery(api.rides.listDriverHistory) || [];
 
@@ -16,7 +19,11 @@ export default function HistoryScreen() {
         const day = date.toLocaleDateString([], { day: 'numeric', month: 'short' });
 
         return (
-            <View style={styles.card}>
+            <TouchableOpacity
+                style={styles.card}
+                onPress={() => router.push(`/(driver)/history/${item._id}`)}
+                activeOpacity={0.7}
+            >
                 {/* Time Column */}
                 <View style={styles.timeCol}>
                     <Text style={styles.timeText}>{time}</Text>
@@ -47,13 +54,16 @@ export default function HistoryScreen() {
                     </Text>
                     <Text style={styles.currency}>TZS</Text>
                 </View>
-            </View>
+            </TouchableOpacity>
         );
     };
 
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                    <Ionicons name="chevron-back" size={24} color="#121212" />
+                </TouchableOpacity>
                 <Text style={styles.headerTitle}>Safari Zilizopita / Trip History</Text>
                 <TouchableOpacity style={styles.reportBtn}>
                     <TriangleAlert size={20} color="#666" />
@@ -97,6 +107,10 @@ const styles = StyleSheet.create({
     },
     reportBtn: {
         padding: 8,
+    },
+    backBtn: {
+        padding: 8,
+        marginRight: 8,
     },
     listContent: {
         padding: 16,

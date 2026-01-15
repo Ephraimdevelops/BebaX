@@ -8,6 +8,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 
+import { Link } from 'expo-router';
+
 export default function AdminHome() {
     const { signOut } = useAuth();
     const [activeTab, setActiveTab] = useState('loads'); // 'loads' | 'team'
@@ -39,6 +41,11 @@ export default function AdminHome() {
                     <Text style={styles.headerLabel}>CORPORATE ACCOUNT</Text>
                     <Text style={styles.companyName}>{org?.name || "Loading..."}</Text>
                 </View>
+                <Link href="/(admin)/verifications" asChild>
+                    <TouchableOpacity style={styles.logoutButton}>
+                        <MaterialIcons name="verified-user" size={20} color={Colors.text} />
+                    </TouchableOpacity>
+                </Link>
                 <TouchableOpacity onPress={() => signOut()} style={styles.logoutButton}>
                     <MaterialIcons name="logout" size={20} color={Colors.text} />
                 </TouchableOpacity>
