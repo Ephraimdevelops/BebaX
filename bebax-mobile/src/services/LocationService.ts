@@ -7,7 +7,18 @@ const LOCATION_TASK_NAME = 'BEBAX_LOCATION_TRACKER';
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     if (error) {
         // Error occurred - check `error.message` for more details.
-        console.error("Location task error:", error);
+        const errorMessage = (error as any)?.message || "";
+
+        // Handle common iOS Simulator error where location is set to "None"
+        if (errorMessage.includes("kCLErrorDomain Code=0")) {
+            console.error(
+                "❌ [LOCATION ERROR] Location Not Found (kCLErrorDomain Code=0)\n" +
+                "💡 TIP: If you are using the iOS Simulator, go to Features > Location and select 'Apple' or 'City Run'. " +
+                "The simulator defaults to 'None' which causes this error."
+            );
+        } else {
+            console.error("Location task error:", error);
+        }
         return;
     }
     if (data) {

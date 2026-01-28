@@ -230,9 +230,14 @@ const styles = StyleSheet.create({
     // Toggle
     toggleContainer: {
         flexDirection: 'row', backgroundColor: '#F1F5F9', borderRadius: 12, padding: 4, marginBottom: 16,
-        alignSelf: 'flex-start'
+        width: '100%' // Ensure full width
     },
-    toggleBtn: { paddingVertical: 12, paddingHorizontal: 20, alignItems: 'center', borderRadius: 10 }, // Increased padding
+    toggleBtn: {
+        flex: 1, // Share space equally
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderRadius: 10
+    },
     toggleBtnActive: { backgroundColor: '#FFF', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
     toggleText: { fontSize: 14, fontWeight: '700', color: '#64748B' }, // Increased font size and weight
     toggleTextActive: { color: Colors.primary, fontWeight: '800' },
